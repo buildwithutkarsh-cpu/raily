@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import AppSidebar, { type AppSection } from "./AppSidebar";
 import TopBar from "./TopBar";
@@ -12,6 +12,8 @@ import PNRManager from "./PNRManager";
 import BookingHistory from "./BookingHistory";
 import NotificationsPanel from "./NotificationsPanel";
 import TravelPlanner from "./TravelPlanner";
+import BookingConfirmation from "./BookingConfirmation";
+import { BookingProvider, useBooking } from "@/lib/booking-store";
 import {
   TrainFront,
   ArrowRight,
@@ -41,18 +43,38 @@ function WelcomeContent() {
           <span className="text-[var(--railway-red)]">A. Kumar</span>
         </h1>
         <p className="text-[15px] text-[var(--muted)] mt-3 max-w-xl">
-          Ask me anything about your journey. I can book trains, check PNR status,
-          suggest routes, and plan your travel.
+          Ask me anything about your journey. I can book trains, check PNR
+          status, suggest routes, and plan your travel.
         </p>
       </div>
 
       {/* Quick actions */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "AI Search", desc: "Book with natural language", icon: Sparkles, section: "search" as AppSection },
-          { label: "Train Explorer", desc: "Browse & compare trains", icon: Train, section: "trains" as AppSection },
-          { label: "Coach View", desc: "Choose your seat", icon: Map, section: "coach" as AppSection },
-          { label: "Live Journey", desc: "Track in real-time", icon: Clock, section: "journey" as AppSection },
+          {
+            label: "AI Search",
+            desc: "Book with natural language",
+            icon: Sparkles,
+            section: "search" as AppSection,
+          },
+          {
+            label: "Train Explorer",
+            desc: "Browse & compare trains",
+            icon: Train,
+            section: "trains" as AppSection,
+          },
+          {
+            label: "Coach View",
+            desc: "Choose your seat",
+            icon: Map,
+            section: "coach" as AppSection,
+          },
+          {
+            label: "Live Journey",
+            desc: "Track in real-time",
+            icon: Clock,
+            section: "journey" as AppSection,
+          },
         ].map((item) => (
           <button
             key={item.label}
@@ -83,9 +105,25 @@ function WelcomeContent() {
         </div>
         <div className="space-y-2">
           {[
-            { title: "Delhi → Jaipur", detail: "Tomorrow, 28 Jul · Rajdhani Express 12951", status: "Confirmed", time: "2 min ago" },
-            { title: "PNR 8651274390", detail: "Shatabdi Express · Delhi → Chandigarh", status: "RAC", time: "1 hour ago" },
-            { title: "Price Alert", detail: "Garib Rath Delhi → Jaipur dropped to ₹740", status: "Active", time: "3 hours ago" },
+            {
+              title: "Delhi → Jaipur",
+              detail:
+                "Tomorrow, 28 Jul · Rajdhani Express 12951",
+              status: "Confirmed",
+              time: "2 min ago",
+            },
+            {
+              title: "PNR 8651274390",
+              detail: "Shatabdi Express · Delhi → Chandigarh",
+              status: "RAC",
+              time: "1 hour ago",
+            },
+            {
+              title: "Price Alert",
+              detail: "Garib Rath Delhi → Jaipur dropped to ₹740",
+              status: "Active",
+              time: "3 hours ago",
+            },
           ].map((item, i) => (
             <div
               key={i}
@@ -97,14 +135,18 @@ function WelcomeContent() {
                 </div>
                 <div>
                   <div className="text-sm font-semibold">{item.title}</div>
-                  <div className="text-[11px] text-[var(--muted)]">{item.detail}</div>
+                  <div className="text-[11px] text-[var(--muted)]">
+                    {item.detail}
+                  </div>
                 </div>
               </div>
               <div className="text-right">
                 <span className="text-[11px] px-2 py-0.5 border border-[var(--fg)] uppercase tracking-[0.1em]">
                   {item.status}
                 </span>
-                <div className="text-[10px] text-[var(--muted)] mt-1">{item.time}</div>
+                <div className="text-[10px] text-[var(--muted)] mt-1">
+                  {item.time}
+                </div>
               </div>
             </div>
           ))}
@@ -131,44 +173,100 @@ function WelcomeContent() {
   );
 }
 
-function renderSection(section: AppSection) {
-  switch (section) {
-    case "search":
-      return <TrainExplorer />;
-    case "trains":
-      return <TrainExplorer />;
-    case "coach":
-      return <CoachVisualizer />;
-    case "journey":
-      return <JourneyTracker />;
-    case "bookings":
-      return <BookingHistory />;
-    case "pnr":
-      return <PNRManager />;
-    case "planner":
-      return <TravelPlanner />;
-    case "notifications":
-      return <NotificationsPanel />;
-    case "settings":
-      return (
-        <div className="space-y-6">
-          <h2 className="text-xl font-bold uppercase tracking-[0.05em]">Settings</h2>
-          <p className="text-[13px] text-[var(--muted)]">Settings panel coming soon.</p>
+function BookingFlowContent() {
+  const { state, setStep, resetBooking } = useBooking();
+
+  return (
+    <div className="space-y-6">
+      {/* Booking flow header when active */}
+      {state.step !== "idle" && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              {[
+                { step: "idle" as const, label: "Search" },
+                { step: "recommendations" as const, label: "Select Train" },
+                { step: "coach-view" as const, label: "Choose Seat" },
+                { step: "confirmed" as const, label: "Confirm" },
+              ].map((item, i) => {
+                const isActive = state.step === item.step || 
+                  (state.step === "searching" && item.step === "recommendations") ||
+                  (state.step === "confirming" && item.step === "confirmed");
+                const isDone = 
+                  (item.step === "idle" && state.step !== "idle") ||
+                  (item.step === "recommendations" && (state.step === "coach-view" || state.step === "confirming" || state.step === "confirmed")) ||
+                  (item.step === "coach-view" && (state.step === "confirming" || state.step === "confirmed")) ||
+                  (item.step === "confirmed" && state.step === "confirmed");
+                return (
+                  <div key={item.label} className="flex items-center gap-2">
+                    <span
+                      className={`text-[10px] px-2 py-1 uppercase tracking-[0.1em] font-bold transition-colors ${
+                        isActive
+                          ? "bg-[var(--fg)] text-[var(--bg)]"
+                          : isDone
+                          ? "text-[var(--muted)]"
+                          : "text-[var(--muted)]/50"
+                      }`}
+                    >
+                      {isDone ? "✓" : `0${i + 1}`}
+                    </span>
+                    <span
+                      className={`text-[11px] uppercase tracking-[0.1em] ${
+                        isActive
+                          ? "text-[var(--fg)] font-bold"
+                          : isDone
+                          ? "text-[var(--muted)]"
+                          : "text-[var(--muted)]/50"
+                      }`}
+                    >
+                      {item.label}
+                    </span>
+                    {i < 3 && <span className="text-[var(--muted)]/30 mx-1">—</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <button
+            onClick={resetBooking}
+            className="text-[11px] uppercase tracking-[0.1em] text-[var(--muted)] hover:text-[var(--fg)] transition-colors"
+          >
+            Clear ×
+          </button>
         </div>
-      );
-    default:
-      return <TrainExplorer />;
-  }
+      )}
+
+      {/* Render the appropriate view based on booking step */}
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={state.step + "-" + (state.selectedTrain?.id || "none")}
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -12 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+        >
+          {state.step === "idle" && <WelcomeContent />}
+          {(state.step === "searching" || state.step === "recommendations") && (
+            <TrainExplorer />
+          )}
+          {state.step === "coach-view" && <CoachVisualizer />}
+          {state.step === "confirmed" && <BookingConfirmation />}
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
 }
 
-export default function AppLayout({
-  defaultSection = "search",
+
+
+function AppLayoutInner({
+  defaultSection,
 }: {
   defaultSection?: AppSection;
 }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(true);
-  const [activeSection, setActiveSection] = useState<AppSection>(defaultSection);
+  const [activeSection, setActiveSection] = useState<AppSection>(defaultSection ?? "search");
   const [unreadNotifications] = useState(3);
 
   const handleToggleCollapse = useCallback(() => {
@@ -178,6 +276,15 @@ export default function AppLayout({
   const handleToggleAssistant = useCallback(() => {
     setAssistantOpen((prev) => !prev);
   }, []);
+
+  const { state } = useBooking();
+
+  // Auto-switch to search section when booking starts
+  useEffect(() => {
+    if (state.step !== "idle" && activeSection !== "search") {
+      setActiveSection("search");
+    }
+  }, [state.step, activeSection]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg)] text-[var(--fg)]">
@@ -215,7 +322,31 @@ export default function AppLayout({
                   exit={{ opacity: 0, y: -8 }}
                   transition={{ duration: 0.2, ease: "easeOut" }}
                 >
-                  {activeSection === "search" ? <WelcomeContent /> : renderSection(activeSection)}
+                  {activeSection === "search" ? (
+                    <BookingFlowContent />
+                  ) : (
+                    <>
+                      {activeSection === "trains" && <TrainExplorer />}
+                      {activeSection === "coach" && <CoachVisualizer />}
+                      {activeSection === "journey" && <JourneyTracker />}
+                      {activeSection === "bookings" && <BookingHistory />}
+                      {activeSection === "pnr" && <PNRManager />}
+                      {activeSection === "planner" && <TravelPlanner />}
+                      {activeSection === "notifications" && (
+                        <NotificationsPanel />
+                      )}
+                      {activeSection === "settings" && (
+                        <div className="space-y-6">
+                          <h2 className="text-xl font-bold uppercase tracking-[0.05em]">
+                            Settings
+                          </h2>
+                          <p className="text-[13px] text-[var(--muted)]">
+                            Settings panel coming soon.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </motion.div>
               </AnimatePresence>
             </div>
@@ -241,5 +372,17 @@ export default function AppLayout({
         </div>
       </motion.div>
     </div>
+  );
+}
+
+export default function AppLayout({
+  defaultSection = "search",
+}: {
+  defaultSection?: AppSection;
+}) {
+  return (
+    <BookingProvider>
+      <AppLayoutInner defaultSection={defaultSection} />
+    </BookingProvider>
   );
 }
