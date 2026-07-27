@@ -166,14 +166,6 @@ function getToday(): string {
   return new Date().toISOString().split("T")[0];
 }
 
-function calcProbability(seats: number, total: number): number {
-  if (seats <= 0) return 10;
-  const ratio = seats / total;
-  if (ratio > 0.5) return 97;
-  if (ratio > 0.2) return 82;
-  return 62;
-}
-
 function durationToMinutes(d: string): number {
   const parts = d.match(/(\d+)h\s*(\d+)?m?/);
   if (!parts) return 0;

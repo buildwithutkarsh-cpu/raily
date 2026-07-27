@@ -46,7 +46,6 @@ export default function AIAssistantPanel({
     state,
     setStep,
     setQuery,
-    setTrains,
     selectTrain,
     setSelectedSeat,
     setSeatRecommendation,

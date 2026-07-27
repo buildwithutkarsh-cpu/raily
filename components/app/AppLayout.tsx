@@ -174,7 +174,7 @@ function WelcomeContent() {
 }
 
 function BookingFlowContent() {
-  const { state, setStep, resetBooking } = useBooking();
+  const { state, resetBooking } = useBooking();
 
   return (
     <div className="space-y-6">
