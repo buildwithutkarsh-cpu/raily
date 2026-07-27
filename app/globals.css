@@ -1,0 +1,641 @@
+@import "tailwindcss";
+
+/* ─── DESIGN TOKENS ───────────────────────────────────────────
+   Monochrome + Railway Red. Industrial. Mechanical. Confident.
+   Editorial + Brutalist. No glassmorphism. No heavy shadows.
+   ─────────────────────────────────────────────────────────── */
+
+:root {
+  --bg: #F5F2EA;
+  --fg: #111111;
+  --border: #111111;
+  --muted: rgba(17, 17, 17, 0.5);
+  --accent: #111111;
+  --accent-red: #C41E3A;
+  --accent-red-muted: rgba(196, 30, 58, 0.15);
+  --card-bg: #F5F2EA;
+  --card-border: #111111;
+  --text-muted: rgba(17, 17, 17, 0.5);
+  --success: #111111;
+  --warning: #111111;
+  --danger: #111111;
+  --glow: #111111;
+  --railway-red: #C41E3A;
+  --railway-red-light: rgba(196, 30, 58, 0.1);
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-red: var(--accent-red);
+  --color-border: var(--border);
+  --color-card-bg: var(--card-bg);
+  --color-card-border: var(--card-border);
+  --color-text-muted: var(--text-muted);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ─── BASE ─────────────────────────────────────────────────── */
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  cursor: none; /* custom cursor handled by Cursor.tsx */
+}
+
+html {
+  scroll-behavior: auto;
+}
+
+::selection {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* ─── NOISE OVERLAY ────────────────────────────────────────── */
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(#000 1px, transparent 1px);
+  background-size: 4px 4px;
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ─── ALIVE GRID ───────────────────────────────────────────── */
+
+.grid-overlay {
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(rgba(17, 17, 17, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 17, 17, 0.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── CURSOR ───────────────────────────────────────────────── */
+
+.custom-cursor {
+  position: fixed;
+  width: 8px;
+  height: 8px;
+  background: var(--fg);
+  pointer-events: none;
+  z-index: 10000;
+  transform: translate(-50%, -50%);
+  transition: width 0.2s ease, height 0.2s ease;
+}
+
+.custom-cursor.expanded {
+  width: 20px;
+  height: 20px;
+}
+
+/* ─── CINEMATIC MODULES ────────────────────────────────────── */
+
+.cinematic {
+  height: 300vh;
+  position: relative;
+}
+
+.cinematic-pin {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* Base transform for mouse perspective — set via JS */
+  will-change: transform;
+}
+
+.cinematic-word {
+  font-size: 18vw;
+  font-weight: 700;
+  line-height: 0.9;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  user-select: none;
+  position: relative;
+  z-index: 3; /* Above INDIA */
+  will-change: transform, opacity;
+}
+
+.cinematic-letter-group {
+  display: inline-block;
+  position: relative;
+  white-space: nowrap;
+}
+
+.cinematic-india {
+  font-size: 18vw;
+  font-weight: 700;
+  line-height: 0.9;
+  text-transform: uppercase;
+  color: transparent;
+  -webkit-text-stroke: 2px var(--fg);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  clip-path: inset(0 100% 0 0);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 1; /* Behind RAILY */
+  will-change: clip-path, transform, opacity;
+}
+
+.cinematic-status {
+  position: absolute;
+  top: 40px;
+  left: 40px;
+  font-size: 11px;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: var(--muted);
+  z-index: 5;
+}
+
+.cinematic-side {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%) rotate(-90deg);
+  transform-origin: left center;
+  font-size: 10px;
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.cinematic-scroll {
+  position: absolute;
+  bottom: 40px;
+  right: 40px;
+  font-size: 11px;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--muted);
+  z-index: 5;
+}
+
+.cinematic-line {
+  position: absolute;
+  height: 1px;
+  background: var(--fg);
+  width: calc(100% - 80px);
+  left: 40px;
+  z-index: 5;
+}
+
+.cinematic-line.top {
+  top: 80px;
+}
+
+.cinematic-line.bottom {
+  bottom: 80px;
+}
+
+/* ─── TERMINAL OVERLAY ─────────────────────────────────────── */
+
+.terminal-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--fg);
+  color: var(--bg);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  clip-path: circle(0% at 50% 50%);
+  overflow: hidden;
+}
+
+.terminal-overlay .terminal-content {
+  font-size: 2vw;
+  line-height: 1.8;
+  max-width: 800px;
+  padding: 80px;
+}
+
+.terminal-overlay .terminal-content div {
+  font-size: 2vw;
+  line-height: 1.8;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.1em;
+  background: var(--bg);
+  vertical-align: text-bottom;
+  animation: blink 0.9s step-end infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* ─── APP CONTENT (post-cinematic) ─────────────────────────── */
+
+.app-content {
+  position: relative;
+  z-index: 50;
+  background: var(--bg);
+  border-top: 1px solid var(--fg);
+}
+
+/* ─── BUTTONS ──────────────────────────────────────────────── */
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 32px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--bg);
+  background: var(--fg);
+  border: 2px solid var(--fg);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.15s ease;
+  cursor: none;
+  position: relative;
+}
+
+.btn-primary:hover {
+  background: transparent;
+  color: var(--fg);
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 32px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--fg);
+  background: transparent;
+  border: 2px solid var(--fg);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  transition: all 0.15s ease;
+  cursor: none;
+}
+
+.btn-secondary:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: opacity 0.15s;
+  cursor: none;
+}
+
+.btn-ghost:hover {
+  opacity: 0.5;
+}
+
+.btn-enter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px 48px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--bg);
+  background: var(--railway-red);
+  border: 2px solid var(--railway-red);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  transition: all 0.2s ease;
+  cursor: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-enter::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--fg);
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.3s ease;
+}
+
+.btn-enter:hover::before {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.btn-enter span {
+  position: relative;
+  z-index: 1;
+}
+
+.btn-enter:hover {
+  border-color: var(--fg);
+}
+
+/* ─── CARDS ────────────────────────────────────────────────── */
+
+.card {
+  border: 2px solid var(--fg);
+  background: var(--bg);
+  position: relative;
+  transition: none;
+}
+
+.card:hover {
+  border-color: var(--fg);
+}
+
+.card-content {
+  padding: 24px;
+}
+
+/* ─── CHIPS / BADGES ───────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--fg);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all 0.15s ease;
+  cursor: none;
+}
+
+.chip:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.chip-active {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--fg);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+.badge-accent {
+  border-color: var(--fg);
+}
+
+.badge-success {
+  border-color: var(--fg);
+}
+
+.badge-warning {
+  border-color: var(--fg);
+}
+
+.badge-danger {
+  border-color: var(--fg);
+}
+
+/* ─── INPUT ────────────────────────────────────────────────── */
+
+.input-terminal {
+  width: 100%;
+  padding: 16px 24px;
+  font-size: 14px;
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--fg);
+  background: transparent;
+  border: 2px solid var(--fg);
+  transition: none;
+  resize: none;
+  outline: none;
+}
+
+.input-terminal:focus {
+  border-color: var(--fg);
+}
+
+.input-terminal::placeholder {
+  color: var(--muted);
+}
+
+/* ─── SEATS ────────────────────────────────────────────────── */
+
+.seat {
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--fg);
+  transition: all 0.15s ease;
+  cursor: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.seat-available {
+  background: transparent;
+  color: var(--fg);
+}
+
+.seat-available:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.seat-booked {
+  background: var(--fg);
+  opacity: 0.3;
+  border-color: var(--fg);
+  cursor: none;
+}
+
+.seat-selected {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+.seat-recommended {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+/* ─── TRAIN LINE ───────────────────────────────────────────── */
+
+.train-line {
+  position: relative;
+  height: 1px;
+  background: var(--fg);
+  overflow: hidden;
+}
+
+/* ─── SCROLLBAR ────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--fg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg);
+}
+
+/* ─── UTILITY ──────────────────────────────────────────────── */
+
+* {
+  border-color: var(--fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ─── APP LAYOUT UTILITIES ─────────────────────────────────── */
+
+.app-scroll {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fg) transparent;
+}
+
+/* ─── Ensure components get font-family */
+button, input, textarea, select {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+/* ─── Keyframes ────────────────────────────────────────────── */
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes slide-down {
+  from { transform: translateY(-20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes typingDot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* ─── Railway-specific accents ─────────────────────────────── */
+
+.text-railway-red {
+  color: var(--railway-red);
+}
+
+.border-railway-red {
+  border-color: var(--railway-red);
+}
+
+.bg-railway-red {
+  background-color: var(--railway-red);
+}
+
+.bg-railway-red-light {
+  background-color: var(--railway-red-light);
+}
