@@ -1,7 +1,9 @@
 /* ══════════════════════════════════════════════════════════════
    RAILWAY — API Client
    The single entry point for all railway data.
-   Combines provider, caching, retry logic, and timeout handling.
+   Combines provider, caching, retry logic, timeout handling,
+   and automatic fallback to mock data when the live API is
+   unavailable or quota is exhausted.
    
    Usage:
      const client = getRailwayClient();
@@ -71,9 +73,11 @@ export class RailwayRateLimitError extends RailwayAPIError {
 /* ─── Client ───────────────────────────────────────────────── */
 
 export class RailwayClient {
-  private provider: RailwayProvider;
+  private primaryProvider: RailwayProvider;
+  private fallbackProvider: MockRailwayProvider;
   private cache: RailwayCache;
   private config: Required<RailwayClientConfig>;
+  private quotaExhausted = false;
 
   constructor(config?: RailwayClientConfig) {
     this.config = {
@@ -85,24 +89,23 @@ export class RailwayClient {
     };
 
     this.cache = new RailwayCache(this.config.cacheTTL);
+    this.fallbackProvider = new MockRailwayProvider();
 
-    // Select provider based on configuration
+    // Select primary provider based on configuration
     if (this.config.useMock || !this.config.apiKey) {
-      this.provider = new MockRailwayProvider();
+      this.primaryProvider = this.fallbackProvider;
     } else {
       const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
       const baseUrl = process.env.RAILWAY_API_BASE_URL;
 
       if (rapidApiHost) {
-        // Use the dedicated IRCTC RapidAPI provider
-        this.provider = new IRCTCRapidAPIProvider({
+        this.primaryProvider = new IRCTCRapidAPIProvider({
           apiKey: this.config.apiKey,
           rapidApiHost,
           baseUrl: baseUrl || undefined,
         });
       } else {
-        // Use the indianrailapi.com provider (direct API key)
-        this.provider = new IndianRailAPIProvider({
+        this.primaryProvider = new IndianRailAPIProvider({
           apiKey: this.config.apiKey,
           rapidApiHost: undefined,
           baseUrl: baseUrl || undefined,
@@ -114,11 +117,11 @@ export class RailwayClient {
   /* ─── Provider Info ──────────────────────────────────────── */
 
   get providerName(): string {
-    return this.provider.name;
+    return this.primaryProvider.name;
   }
 
   get isMock(): boolean {
-    return this.provider instanceof MockRailwayProvider;
+    return this.primaryProvider instanceof MockRailwayProvider || this.quotaExhausted;
   }
 
   get cacheStats() {
@@ -130,23 +133,26 @@ export class RailwayClient {
   async searchStations(query: string, limit = 10): Promise<ApiResponse<StationSearchResult>> {
     return this.execute(
       RailwayCache.key.stations(query),
-      () => this.provider.searchStations(query, limit)
+      () => this.primaryProvider.searchStations(query, limit),
+      () => this.fallbackProvider.searchStations(query, limit)
     );
   }
 
   async searchTrains(from: string, to: string, date: string, cls?: string): Promise<ApiResponse<TrainSearchResult>> {
     return this.execute(
       RailwayCache.key.trains(from, to, date),
-      () => this.provider.searchTrains({ from, to, date, class: cls }),
-      120_000 // Cache train search for 2 minutes
+      () => this.primaryProvider.searchTrains({ from, to, date, class: cls }),
+      () => this.fallbackProvider.searchTrains({ from, to, date, class: cls }),
+      120_000
     );
   }
 
   async getTrainSchedule(trainNumber: string): Promise<ApiResponse<TrainSchedule>> {
     return this.execute(
       RailwayCache.key.schedule(trainNumber),
-      () => this.provider.getTrainSchedule(trainNumber),
-      600_000 // Cache schedule for 10 minutes
+      () => this.primaryProvider.getTrainSchedule(trainNumber),
+      () => this.fallbackProvider.getTrainSchedule(trainNumber),
+      600_000
     );
   }
 
@@ -159,40 +165,45 @@ export class RailwayClient {
   ): Promise<ApiResponse<SeatAvailability>> {
     return this.execute(
       RailwayCache.key.seatAvail(trainNumber, from, to, date, cls),
-      () => this.provider.getSeatAvailability({ trainNumber, from, to, date, class: cls }),
-      30_000 // Cache seat availability for 30 seconds
+      () => this.primaryProvider.getSeatAvailability({ trainNumber, from, to, date, class: cls }),
+      () => this.fallbackProvider.getSeatAvailability({ trainNumber, from, to, date, class: cls }),
+      30_000
     );
   }
 
   async getFare(trainNumber: string, from: string, to: string): Promise<ApiResponse<FareEnquiry>> {
     return this.execute(
       RailwayCache.key.fare(trainNumber, from, to),
-      () => this.provider.getFare({ trainNumber, from, to }),
-      300_000 // Cache fare for 5 minutes
+      () => this.primaryProvider.getFare({ trainNumber, from, to }),
+      () => this.fallbackProvider.getFare({ trainNumber, from, to }),
+      300_000
     );
   }
 
   async getPNRStatus(pnr: string): Promise<ApiResponse<PNRStatus>> {
     return this.execute(
       RailwayCache.key.pnr(pnr),
-      () => this.provider.getPNRStatus(pnr),
-      15_000 // Cache PNR for 15 seconds
+      () => this.primaryProvider.getPNRStatus(pnr),
+      () => this.fallbackProvider.getPNRStatus(pnr),
+      15_000
     );
   }
 
   async getLiveStatus(trainNumber: string): Promise<ApiResponse<LiveStatus>> {
     return this.execute(
       RailwayCache.key.liveStatus(trainNumber),
-      () => this.provider.getLiveStatus(trainNumber),
-      10_000 // Cache live status for 10 seconds
+      () => this.primaryProvider.getLiveStatus(trainNumber),
+      () => this.fallbackProvider.getLiveStatus(trainNumber),
+      10_000
     );
   }
 
   async getCoachComposition(trainNumber: string): Promise<ApiResponse<CoachComposition>> {
     return this.execute(
       RailwayCache.key.coach(trainNumber),
-      () => this.provider.getCoachComposition(trainNumber),
-      600_000 // Cache coach composition for 10 minutes
+      () => this.primaryProvider.getCoachComposition(trainNumber),
+      () => this.fallbackProvider.getCoachComposition(trainNumber),
+      600_000
     );
   }
 
@@ -200,7 +211,8 @@ export class RailwayClient {
 
   private async execute<T>(
     cacheKey: string,
-    fetcher: () => Promise<T>,
+    primaryFetcher: () => Promise<T>,
+    fallbackFetcher: () => Promise<T>,
     ttlMs?: number
   ): Promise<ApiResponse<T>> {
     try {
@@ -215,18 +227,47 @@ export class RailwayClient {
         };
       }
 
-      // Fetch with retry + timeout
-      const data = await this.withRetry(() => this.withTimeout(fetcher()));
+      // If quota was previously exhausted, skip the real API entirely
+      if (this.quotaExhausted) {
+        const data = await fallbackFetcher();
+        this.cache.set(cacheKey, data, ttlMs);
+        return {
+          success: true,
+          data,
+          cached: false,
+          timestamp: new Date().toISOString(),
+        };
+      }
 
-      // Cache the result
-      this.cache.set(cacheKey, data, ttlMs);
-
-      return {
-        success: true,
-        data,
-        cached: false,
-        timestamp: new Date().toISOString(),
-      };
+      // Try primary provider first
+      try {
+        const data = await this.withRetry(() => this.withTimeout(primaryFetcher()));
+        this.cache.set(cacheKey, data, ttlMs);
+        return {
+          success: true,
+          data,
+          cached: false,
+          timestamp: new Date().toISOString(),
+        };
+      } catch (err) {
+        // If it's a quota/rate-limit error, mark quota exhausted and fallback
+        if (
+          err instanceof RailwayAPIError &&
+          (err.code === "QUOTA_EXCEEDED" || err.code === "RATE_LIMIT" || err.status === 429)
+        ) {
+          this.quotaExhausted = true;
+          console.warn("[RailwayClient] API quota exhausted. Falling back to mock data.");
+          const data = await fallbackFetcher();
+          this.cache.set(cacheKey, data, ttlMs);
+          return {
+            success: true,
+            data,
+            cached: false,
+            timestamp: new Date().toISOString(),
+          };
+        }
+        throw err; // Re-throw non-quota errors
+      }
     } catch (err) {
       if (err instanceof RailwayAPIError) {
         return {
@@ -273,13 +314,12 @@ export class RailwayClient {
       return await fn();
     } catch (err) {
       if (err instanceof RailwayRateLimitError) {
-        // For rate limits, wait longer
         await this.sleep(5000);
         return fn();
       }
 
       if (attempt < this.config.maxRetries) {
-        await this.sleep(Math.pow(2, attempt) * 500); // Exponential backoff
+        await this.sleep(Math.pow(2, attempt) * 500);
         return this.withRetry(fn, attempt + 1);
       }
 
@@ -316,8 +356,6 @@ export function getRailwayClient(): RailwayClient {
   }
   return globalClient;
 }
-
-
 
 /** Reset the global client (useful for testing) */
 export function resetRailwayClient(): void {

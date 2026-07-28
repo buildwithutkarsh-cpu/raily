@@ -227,46 +227,6 @@ body::before {
   bottom: 80px;
 }
 
-/* ─── TERMINAL OVERLAY ─────────────────────────────────────── */
-
-.terminal-overlay {
-  position: absolute;
-  inset: 0;
-  background: var(--fg);
-  color: var(--bg);
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  clip-path: circle(0% at 50% 50%);
-  overflow: hidden;
-}
-
-.terminal-overlay .terminal-content {
-  font-size: 2vw;
-  line-height: 1.8;
-  max-width: 800px;
-  padding: 80px;
-}
-
-.terminal-overlay .terminal-content div {
-  font-size: 2vw;
-  line-height: 1.8;
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.terminal-cursor {
-  display: inline-block;
-  width: 0.6em;
-  height: 1.1em;
-  background: var(--bg);
-  vertical-align: text-bottom;
-  animation: blink 0.9s step-end infinite;
-}
-
-@keyframes blink {
-  50% { opacity: 0; }
-}
 
 /* ─── APP CONTENT (post-cinematic) ─────────────────────────── */
 
@@ -343,48 +303,6 @@ body::before {
   opacity: 0.5;
 }
 
-.btn-enter {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 20px 48px;
-  font-size: 16px;
-  font-weight: 700;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--bg);
-  background: var(--railway-red);
-  border: 2px solid var(--railway-red);
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  transition: all 0.2s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.btn-enter::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: var(--fg);
-  transform: scaleX(0);
-  transform-origin: right;
-  transition: transform 0.3s ease;
-}
-
-.btn-enter:hover::before {
-  transform: scaleX(1);
-  transform-origin: left;
-}
-
-.btn-enter span {
-  position: relative;
-  z-index: 1;
-}
-
-.btn-enter:hover {
-  border-color: var(--fg);
-}
 
 /* ─── CARDS ────────────────────────────────────────────────── */
 
