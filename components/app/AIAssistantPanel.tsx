@@ -20,7 +20,6 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  /** Optional action buttons shown with message */
   actions?: {
     label: string;
     action: () => void;
@@ -77,24 +76,10 @@ export default function AIAssistantPanel({
     }
   }, [isOpen]);
 
-  /* ── Simulated AI Query Parsing ────────────────────────── */
+  /* ── Query Parsing ──────────────────────────────────────── */
   const parseQuery = useCallback(
     (text: string): { query: ExtractedQuery; response: string } => {
       const lower = text.toLowerCase();
-
-      // PNR check
-      const pnrMatch = text.match(/\b\d{10}\b/);
-      if (pnrMatch || lower.includes("pnr") || lower.includes("status")) {
-        return {
-          query: {
-            origin: "",
-            destination: "",
-            date: "",
-            raw: text,
-          },
-          response: `I found your PNR details. PNR **4785213694** — Rajdhani Express (12951) Delhi → Jaipur, 28 Jul 2026. Status: **Confirmed ✅** Coach B1, Seat 34 (Lower). Platform 5. Departure in 1 hour. I'll show you the full details.`,
-        };
-      }
 
       // Extract origin & destination
       const routePattern =
@@ -146,11 +131,11 @@ export default function AIAssistantPanel({
           year: "numeric",
         });
       } else if (lower.includes("friday")) {
-        date = "Fri, 31 Jul 2026";
+        date = "This Friday";
       } else if (lower.includes("monday")) {
-        date = "Mon, 27 Jul 2026";
+        date = "This Monday";
       } else {
-        date = "Tomorrow, 28 Jul 2026";
+        date = "Soon";
       }
 
       // Build response
@@ -160,7 +145,6 @@ export default function AIAssistantPanel({
         const budgetStr = budget ? ` under ₹${budget}` : "";
         response = `I found trains from **${origin} → ${destination}** on ${date}${prefStr}${budgetStr}. Let me search for the best options and organize them by what matters most.`;
 
-        // Mention top recommendation based on preferences
         if (budget && budget <= 800) {
           response += `\n\n⭐ **Budget Pick:** I'll prioritize the most affordable options within ₹${budget}.`;
         } else if (preference?.includes("Lower")) {
@@ -169,7 +153,7 @@ export default function AIAssistantPanel({
           response += `\n\n⭐ **Top Pick:** I'll recommend the best overall option balancing speed, comfort, and price.`;
         }
       } else {
-        response = `Here are today's top train options. I can help you find the perfect journey — just tell me where you're going!`;
+        response = `I can help you find the perfect train — just tell me where you're going and when! Try something like "Delhi to Jaipur tomorrow".`;
       }
 
       return {
@@ -203,7 +187,7 @@ export default function AIAssistantPanel({
       setMessages((prev) => [...prev, userMsg]);
       setIsTyping(true);
 
-      // Simulate AI processing delay
+      // Simulate processing delay
       await new Promise((r) => setTimeout(r, 800 + Math.random() * 600));
 
       const lower = msgText.toLowerCase();
@@ -229,30 +213,13 @@ export default function AIAssistantPanel({
         const aiMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content: `I found your PNR **4785213694** — here's the simplified status:
-
-✅ **Confirmed**
-• Train: Rajdhani Express (12951)
-• Route: Delhi → Jaipur
-• Date: 28 Jul 2026
-• Coach: **B3**, Seat **32** (Lower Berth)
-• Platform: **5**
-• Departure: **06:25** (in about 1 hour)
-
-Your seat is near the exit and away from the toilets. Would you like me to share the live tracking link?`,
+          content: `I can check the status of any PNR number. Please enter your 10-digit PNR number in the PNR section, or type it here and I'll pull up your booking details.`,
           timestamp: new Date(),
           actions: [
             {
-              label: "View Full PNR",
+              label: "Open PNR Section",
               action: () => {
                 setStep("pnr");
-              },
-              primary: false,
-            },
-            {
-              label: "Track Live Train",
-              action: () => {
-                setStep("journey");
               },
               primary: true,
             },
@@ -267,7 +234,6 @@ Your seat is near the exit and away from the toilets. Would you like me to share
         const { query, response } = parseQuery(msgText);
         setQuery(query);
         setStep("searching");
-        // Fetch trains via the Railway API client (uses mock data by default)
         fetchTrains(query);
 
         const aiMsg: Message = {
@@ -287,7 +253,6 @@ Your seat is near the exit and away from the toilets. Would you like me to share
         };
         setMessages((prev) => [...prev, aiMsg]);
 
-        // Auto-show recommendations after a brief moment
         setTimeout(() => {
           setStep("recommendations");
         }, 500);
@@ -301,7 +266,7 @@ Your seat is near the exit and away from the toilets. Would you like me to share
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content:
-          "I can help you book trains, check PNR status, find routes, and plan your journey. Try something like:\n\n• \"Book Delhi to Jaipur tomorrow\"\n• \"Check PNR 4785213694\"\n• \"Fastest train Mumbai to Pune\"",
+          "I can help you book trains, check PNR status, find routes, and plan your journey. Try something like:\n\n• \"Book Delhi to Jaipur tomorrow\"\n• \"Check PNR status\"\n• \"Fastest train Mumbai to Pune\"",
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, aiMsg]);
@@ -320,11 +285,7 @@ Your seat is near the exit and away from the toilets. Would you like me to share
       const aiMsg: Message = {
         id: (Date.now() + 2).toString(),
         role: "assistant",
-        content: `Great choice! I've selected **${train.name}** (${train.number}) for you. Let me recommend the best seat based on your preferences:
-
-${rec.reason}
-
-Would you like to see this seat in the coach view?`,
+        content: `Great choice! I've selected **${train.name}** (${train.number}) for you. Let me recommend the best seat based on your preferences:\n\n${rec.reason}\n\nWould you like to see this seat in the coach view?`,
         timestamp: new Date(),
         actions: [
           {
@@ -342,29 +303,20 @@ Would you like to see this seat in the coach view?`,
           },
         ],
       };
-      setMessages((prev) => [...prev, aiMsg]);  }, [selectTrain, setSeatRecommendation, setSelectedSeat, getSeatRec]
+      setMessages((prev) => [...prev, aiMsg]);
+    },
+    [selectTrain, setSeatRecommendation, setSelectedSeat, getSeatRec]
   );
 
   /* ── Follow-up: confirm booking ───────────────────────── */
   const handleConfirmBooking = useCallback(() => {
     confirmBooking();
 
+    const train = state.selectedTrain;
     const aiMsg: Message = {
       id: (Date.now() + 3).toString(),
       role: "assistant",
-      content: `🎉 **Booking Confirmed!**
-
-Your ticket has been booked successfully.
-
-• **Train:** ${state.selectedTrain?.name} (${state.selectedTrain?.number})
-• **Route:** Delhi → Jaipur
-• **Date:** 28 Jul 2026
-• **Time:** ${state.selectedTrain?.departure} → ${state.selectedTrain?.arrival}
-• **Coach:** B1 · **Seat:** 7 (Lower Berth)
-• **Amount:** ₹${state.selectedTrain?.price}
-• **PNR:** 4785213694
-
-I've saved this to your bookings. What would you like to do next?`,
+      content: `🎉 **Booking Confirmed!**\n\nYour ticket has been booked successfully.\n\n• **Train:** ${train?.name || "—"} (${train?.number || "—"})\n• **Time:** ${train?.departure || "—"} → ${train?.arrival || "—"}\n• **Amount:** ₹${train?.price || "—"}\n\nI've saved this to your bookings. What would you like to do next?`,
       timestamp: new Date(),
       actions: [
         {

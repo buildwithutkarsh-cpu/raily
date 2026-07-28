@@ -29,58 +29,6 @@ interface PNRData {
   lastUpdated: string;
 }
 
-const mockPNRs: PNRData[] = [
-  {
-    number: "4785213694",
-    status: "confirmed",
-    trainName: "Rajdhani Express",
-    trainNumber: "12951",
-    date: "28 Jul 2026",
-    from: "NDLS",
-    to: "JP",
-    departure: "06:25",
-    arrival: "11:50",
-    class: "3A",
-    passengers: [
-      { name: "A. Kumar", berth: "B1-34 (Lower)", status: "Confirmed" },
-      { name: "P. Sharma", berth: "B1-35 (Upper)", status: "Confirmed" },
-    ],
-    lastUpdated: "2 min ago",
-  },
-  {
-    number: "8651274390",
-    status: "rac",
-    trainName: "Shatabdi Express",
-    trainNumber: "12009",
-    date: "30 Jul 2026",
-    from: "NDLS",
-    to: "CDG",
-    departure: "07:30",
-    arrival: "10:55",
-    class: "CC",
-    passengers: [
-      { name: "R. Patel", berth: "C2-12 (Side)", status: "RAC 1" },
-    ],
-    lastUpdated: "1 hour ago",
-  },
-  {
-    number: "3512876945",
-    status: "waitlist",
-    trainName: "Garib Rath",
-    trainNumber: "12215",
-    date: "1 Aug 2026",
-    from: "NDLS",
-    to: "JP",
-    departure: "08:10",
-    arrival: "14:05",
-    class: "3A",
-    passengers: [
-      { name: "S. Singh", berth: "-", status: "WL 15" },
-    ],
-    lastUpdated: "3 hours ago",
-  },
-];
-
 /* ── AI Explanation Generator ──────────────────────────────── */
 
 function getAIExplanation(pnr: PNRData): {
@@ -92,12 +40,7 @@ function getAIExplanation(pnr: PNRData): {
     case "confirmed":
       return {
         summary: `Your ticket is confirmed ✅ — you have a guaranteed seat on this train.`,
-        plainLanguage: `Your booking for **${pnr.trainName}** (${pnr.trainNumber}) is fully confirmed. This means you have a reserved seat with a confirmed berth number. No need to worry about boarding — just show your ticket and take your assigned seat.
-
-• **Coach:** Your seat is in coach ${pnr.passengers[0]?.berth?.split("-")[0] || "B1"}
-• **Seat:** ${pnr.passengers.map((p) => `${p.name} → ${p.berth}`).join(", ")}
-• **Platform:** Platform 5 (check display for last-minute changes)
-• **Check-in:** Gates open 1 hour before departure`,
+        plainLanguage: `Your booking for **${pnr.trainName}** (${pnr.trainNumber}) is fully confirmed. This means you have a reserved seat with a confirmed berth number. No need to worry about boarding — just show your ticket and take your assigned seat.\n\n• **Coach:** Your seat is in coach ${pnr.passengers[0]?.berth?.split("-")[0] || "B1"}\n• **Seat:** ${pnr.passengers.map((p) => `${p.name} → ${p.berth}`).join(", ")}\n• **Platform:** Platform 5 (check display for last-minute changes)\n• **Check-in:** Gates open 1 hour before departure`,
         tips: [
           "Arrive at the station 30 minutes early to find your platform comfortably.",
           "Pre-order meals through the railway catering app for breakfast on board.",
@@ -107,12 +50,7 @@ function getAIExplanation(pnr: PNRData): {
     case "rac":
       return {
         summary: `You have a Reserved Against Cancellation (RAC) ticket ⚠️ — you can board the train but may need to share a seat initially.`,
-        plainLanguage: `Your ticket for **${pnr.trainName}** (${pnr.trainNumber}) is on RAC (Reserved Against Cancellation). This is actually better than a waitlist!
-
-• **You CAN board the train** — RAC tickets allow you to get on.
-• **You'll have a seat** — initially you may need to share, but as cancellations happen, you'll get your own berth.
-• **Your RAC number is ${pnr.passengers[0]?.status?.replace("RAC ", "") || "1"}** — the lower the number, the sooner you'll get a full berth.
-• **Good news:** Most RAC 1 tickets convert to confirmed before departure.`,
+        plainLanguage: `Your ticket for **${pnr.trainName}** (${pnr.trainNumber}) is on RAC (Reserved Against Cancellation). This is actually better than a waitlist!\n\n• **You CAN board the train** — RAC tickets allow you to get on.\n• **You'll have a seat** — initially you may need to share, but as cancellations happen, you'll get your own berth.\n• **Your RAC number is ${pnr.passengers[0]?.status?.replace("RAC ", "") || "1"}** — the lower the number, the sooner you'll get a full berth.\n• **Good news:** Most RAC 1 tickets convert to confirmed before departure.`,
         tips: [
           "Check PNR status 24 hours before departure — it often converts to confirmed.",
           "You can still cancel and get a partial refund if you find a better option.",
@@ -122,13 +60,7 @@ function getAIExplanation(pnr: PNRData): {
     case "waitlist":
       return {
         summary: `You're on the waitlist (WL) 🕐 — your ticket is not yet confirmed.`,
-        plainLanguage: `Your ticket for **${pnr.trainName}** (${pnr.trainNumber}) is currently on the waitlist (WL). This means your booking is pending and will only be confirmed if other passengers cancel.
-
-• **Current status:** ${pnr.passengers[0]?.status || "WL"} — the lower the number, the better your chances.
-• **What this means:** You may not get a confirmed seat on this train.
-• **Be prepared:** Have a backup plan in case the ticket doesn't confirm.
-
-With waitlist number ${pnr.passengers[0]?.status?.replace("WL ", "") || "15"}, there's about a ${Math.max(100 - parseInt(pnr.passengers[0]?.status?.replace("WL ", "") || "15") * 3, 10)}% chance of confirmation based on historical data.`,
+        plainLanguage: `Your ticket for **${pnr.trainName}** (${pnr.trainNumber}) is currently on the waitlist (WL). This means your booking is pending and will only be confirmed if other passengers cancel.\n\n• **Current status:** ${pnr.passengers[0]?.status || "WL"} — the lower the number, the better your chances.\n• **What this means:** You may not get a confirmed seat on this train.\n• **Be prepared:** Have a backup plan in case the ticket doesn't confirm.\n\nWith waitlist number ${pnr.passengers[0]?.status?.replace("WL ", "") || "15"}, there's about a ${Math.max(100 - parseInt(pnr.passengers[0]?.status?.replace("WL ", "") || "15") * 3, 10)}% chance of confirmation based on historical data.`,
         tips: [
           "Set up PNR alerts — we'll notify you the moment it updates.",
           "Book an alternate train as backup if your travel is critical.",
@@ -176,9 +108,10 @@ export default function PNRManager() {
     e.preventDefault();
     if (!pnrInput.trim() || pnrInput.length !== 10) return;
     setIsSearching(true);
+    // Simulate API call delay — will be replaced with real API integration
     await new Promise((r) => setTimeout(r, 800));
-    const found = mockPNRs.find((p) => p.number === pnrInput);
-    setSearchedPNR(found || null);
+    // No mock data — PNR lookup will return nothing (to be wired to live API)
+    setSearchedPNR(null);
     setIsSearching(false);
   };
 
@@ -417,37 +350,21 @@ export default function PNRManager() {
         </motion.div>
       )}
 
-      {/* Recent PNRs */}
+      {/* Empty state — no recent bookings yet */}
       <div>
         <div className="text-[11px] text-[var(--muted)] uppercase tracking-[0.15em] mb-3">
           Recent Bookings
         </div>
-        <div className="space-y-2">
-          {mockPNRs.map((pnr) => (
-            <button
-              key={pnr.number}
-              onClick={() => {
-                setPnrInput(pnr.number);
-                setSearchedPNR(pnr);
-                setShowAIExplanation(true);
-              }}
-              className="w-full flex items-center justify-between p-4 border border-[var(--fg)]/30 hover:border-[var(--fg)] transition-colors text-left"
-            >
-              <div className="flex items-center gap-4">
-                <Ticket className="h-4 w-4 text-[var(--muted)]" />
-                <div>
-                  <div className="text-sm font-bold">{pnr.number}</div>
-                  <div className="text-[11px] text-[var(--muted)]">
-                    {pnr.trainName} · {pnr.from} → {pnr.to}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] text-[var(--muted)]">{pnr.date}</span>
-                <ChevronRight className="h-4 w-4 text-[var(--muted)]" />
-              </div>
-            </button>
-          ))}
+        <div className="border-2 border-dashed border-[var(--fg)]/30 p-8 text-center">
+          <Ticket className="h-8 w-8 mx-auto mb-3 text-[var(--muted)]" />
+          <p className="text-sm text-[var(--muted)]">
+            No recent PNR lookups yet
+          </p>
+          <p className="text-[11px] text-[var(--muted)] mt-1">
+            Enter a PNR number above to check your booking status,
+            <br />
+            or ask the AI assistant to check it for you.
+          </p>
         </div>
       </div>
     </div>

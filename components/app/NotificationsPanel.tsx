@@ -20,63 +20,6 @@ interface Notification {
   actionable: boolean;
 }
 
-const sampleNotifications: Notification[] = [
-  {
-    id: "1",
-    type: "delay",
-    title: "Train Delay Alert",
-    message: "Rajdhani Express (12951) is running 15 min late. New ETA: 12:05 PM",
-    time: "5 min ago",
-    read: false,
-    actionable: true,
-  },
-  {
-    id: "2",
-    type: "booking",
-    title: "Booking Confirmed",
-    message: "Your booking for Shatabdi Express (12009) on 30 Jul is confirmed. PNR: 8651274390",
-    time: "2 hours ago",
-    read: false,
-    actionable: true,
-  },
-  {
-    id: "3",
-    type: "platform",
-    title: "Platform Change",
-    message: "Rajdhani Express (12951) platform changed from 2 to 3. Please proceed to Platform 3.",
-    time: "3 hours ago",
-    read: true,
-    actionable: false,
-  },
-  {
-    id: "4",
-    type: "food",
-    title: "Food Delivery Update",
-    message: "Your pre-order for Breakfast (Masala Dosa & Coffee) will be served at 08:30 AM.",
-    time: "5 hours ago",
-    read: true,
-    actionable: true,
-  },
-  {
-    id: "5",
-    type: "general",
-    title: "Price Drop Alert",
-    message: "Garib Rath (12215) Delhi → Jaipur now available at ₹740 (was ₹890)",
-    time: "1 day ago",
-    read: true,
-    actionable: false,
-  },
-  {
-    id: "6",
-    type: "booking",
-    title: "Booking Reminder",
-    message: "Your journey Delhi → Jaipur is tomorrow. Check-in opens at 04:25 AM.",
-    time: "1 day ago",
-    read: true,
-    actionable: true,
-  },
-];
-
 const typeConfig: Record<string, { icon: React.ElementType; className: string }> = {
   delay: { icon: Clock, className: "bg-[var(--fg)] text-[var(--bg)]" },
   booking: { icon: CheckCircle, className: "bg-[var(--railway-red)] text-[var(--bg)]" },
@@ -86,21 +29,11 @@ const typeConfig: Record<string, { icon: React.ElementType; className: string }>
 };
 
 export default function NotificationsPanel() {
-  const [notifications, setNotifications] = useState(sampleNotifications);
+  const [notifications] = useState<Notification[]>([]);
   const [filter, setFilter] = useState<"all" | "unread">("all");
 
   const unreadCount = notifications.filter((n) => !n.read).length;
   const filtered = filter === "unread" ? notifications.filter((n) => !n.read) : notifications;
-
-  const markAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
-  };
-
-  const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-  };
 
   return (
     <div className="space-y-6">
@@ -111,17 +44,11 @@ export default function NotificationsPanel() {
             Notifications
           </h2>
           <p className="text-[13px] text-[var(--muted)] mt-1">
-            {unreadCount} unread alert{unreadCount !== 1 ? "s" : ""}
+            {notifications.length === 0
+              ? "No alerts yet"
+              : `${unreadCount} unread alert${unreadCount !== 1 ? "s" : ""}`}
           </p>
         </div>
-        {unreadCount > 0 && (
-          <button
-            onClick={markAllRead}
-            className="text-[11px] uppercase tracking-[0.1em] text-[var(--railway-red)] hover:underline"
-          >
-            Mark all read
-          </button>
-        )}
       </div>
 
       {/* Filter tabs */}
@@ -147,12 +74,34 @@ export default function NotificationsPanel() {
       {/* List */}
       <div className="space-y-2">
         {filtered.length === 0 && (
-          <div className="border-2 border-[var(--fg)] p-8 text-center">
-            <Bell className="h-8 w-8 mx-auto mb-3 text-[var(--muted)]" />
-            <p className="text-sm text-[var(--muted)]">All caught up!</p>
-            <p className="text-[11px] text-[var(--muted)] mt-1">
-              No {filter === "unread" ? "unread " : ""}notifications
+          <div className="border-2 border-[var(--fg)] p-10 text-center">
+            <Bell className="h-10 w-10 mx-auto mb-4 text-[var(--muted)]" />
+            <h3 className="text-base font-bold uppercase tracking-[0.03em] mb-2">
+              All quiet here
+            </h3>
+            <p className="text-[13px] text-[var(--muted)] max-w-sm mx-auto leading-relaxed">
+              Notifications about your bookings, train delays, platform
+              changes, and price drops will appear here once you book
+              your first journey.
             </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {[
+                { icon: Clock, text: "Delay alerts" },
+                { icon: CheckCircle, text: "Booking confirmations" },
+                { icon: Info, text: "Platform changes" },
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <span
+                    key={item.text}
+                    className="flex items-center gap-2 px-3 py-2 border border-[var(--fg)]/20 text-[10px] uppercase tracking-[0.1em] text-[var(--muted)]"
+                  >
+                    <Icon className="h-3 w-3" />
+                    {item.text}
+                  </span>
+                );
+              })}
+            </div>
           </div>
         )}
         {filtered.map((notification) => {
@@ -167,7 +116,6 @@ export default function NotificationsPanel() {
               } p-4 transition-colors ${
                 !notification.read ? "bg-[var(--fg)]/[0.02]" : ""
               }`}
-              onClick={() => markAsRead(notification.id)}
             >
               <div className="flex gap-4">
                 <div

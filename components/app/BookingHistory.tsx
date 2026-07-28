@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Download,
   Search,
+  Train,
 } from "lucide-react";
 
 interface Booking {
@@ -23,99 +24,6 @@ interface Booking {
   status: "completed" | "cancelled" | "upcoming";
   passengers: number;
 }
-
-const bookings: Booking[] = [
-  {
-    id: "1",
-    pnr: "4785213694",
-    trainName: "Rajdhani Express",
-    trainNumber: "12951",
-    from: "NDLS",
-    to: "JP",
-    date: "28 Jul 2026",
-    departure: "06:25",
-    arrival: "11:50",
-    class_: "3A",
-    amount: 2490,
-    status: "upcoming",
-    passengers: 2,
-  },
-  {
-    id: "2",
-    pnr: "8651274390",
-    trainName: "Shatabdi Express",
-    trainNumber: "12009",
-    from: "NDLS",
-    to: "CDG",
-    date: "30 Jul 2026",
-    departure: "07:30",
-    arrival: "10:55",
-    class_: "CC",
-    amount: 1580,
-    status: "upcoming",
-    passengers: 1,
-  },
-  {
-    id: "3",
-    pnr: "3512876945",
-    trainName: "Garib Rath",
-    trainNumber: "12215",
-    from: "NDLS",
-    to: "JP",
-    date: "1 Aug 2026",
-    departure: "08:10",
-    arrival: "14:05",
-    class_: "3A",
-    amount: 740,
-    status: "upcoming",
-    passengers: 1,
-  },
-  {
-    id: "4",
-    pnr: "9123456780",
-    trainName: "Duronto Express",
-    trainNumber: "12285",
-    from: "NDLS",
-    to: "HWH",
-    date: "15 Jul 2026",
-    departure: "05:45",
-    arrival: "10:50",
-    class_: "3A",
-    amount: 2960,
-    status: "completed",
-    passengers: 2,
-  },
-  {
-    id: "5",
-    pnr: "7890123456",
-    trainName: "Intercity Express",
-    trainNumber: "14211",
-    from: "JP",
-    to: "NDLS",
-    date: "10 Jul 2026",
-    departure: "09:00",
-    arrival: "15:30",
-    class_: "SL",
-    amount: 620,
-    status: "completed",
-    passengers: 1,
-  },
-  {
-    id: "6",
-    pnr: "6543210987",
-    trainName: "Jan Shatabdi",
-    trainNumber: "12055",
-    from: "NDLS",
-    to: "JP",
-    date: "5 Jul 2026",
-    departure: "08:15",
-    arrival: "14:25",
-    class_: "2S",
-    amount: 890,
-    status: "cancelled",
-    passengers: 1,
-  },
-];
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   upcoming: {
@@ -135,6 +43,8 @@ const statusConfig: Record<string, { label: string; className: string }> = {
 export default function BookingHistory() {
   const [filter, setFilter] = useState<"all" | "upcoming" | "completed" | "cancelled">("all");
   const [searchQuery, setSearchQuery] = useState("");
+
+  const bookings: Booking[] = [];
 
   const filtered = bookings.filter((b) => {
     if (filter !== "all" && b.status !== filter) return false;
@@ -163,10 +73,15 @@ export default function BookingHistory() {
             Booking History
           </h2>
           <p className="text-[13px] text-[var(--muted)] mt-1">
-            {bookings.length} bookings · ₹{totalSpent.toLocaleString()} total spent
+            {bookings.length === 0
+              ? "No bookings yet"
+              : `${bookings.length} bookings · ₹${totalSpent.toLocaleString()} total spent`}
           </p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 border-2 border-[var(--fg)] text-xs uppercase tracking-[0.1em] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors">
+        <button
+          disabled
+          className="flex items-center gap-2 px-4 py-2 border-2 border-[var(--fg)]/30 text-xs uppercase tracking-[0.1em] text-[var(--muted)] opacity-50 cursor-not-allowed"
+        >
           <Download className="h-3.5 w-3.5" />
           Export
         </button>
@@ -212,7 +127,37 @@ export default function BookingHistory() {
 
       {/* List */}
       <div className="space-y-2">
-        {filtered.length === 0 && (
+        {filtered.length === 0 && !searchQuery && (
+          <div className="border-2 border-dashed border-[var(--fg)]/30 p-12 text-center">
+            <div className="w-14 h-14 flex items-center justify-center bg-[var(--fg)] mx-auto mb-5">
+              <Ticket className="h-7 w-7 text-[var(--bg)]" />
+            </div>
+            <h3 className="text-lg font-bold uppercase tracking-[0.03em] mb-2">
+              No bookings yet
+            </h3>
+            <p className="text-[13px] text-[var(--muted)] max-w-md mx-auto leading-relaxed mb-8">
+              Your booking history will show up here once you book your
+              first journey. Try asking the AI to find and book a train
+              for you.
+            </p>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              {[
+                { icon: Train, text: "Delhi → Jaipur" },
+                { icon: Train, text: "Mumbai → Pune" },
+                { icon: Train, text: "Bangalore → Chennai" },
+              ].map((item) => (
+                <button
+                  key={item.text}
+                  className="flex items-center gap-2 px-4 py-3 border-2 border-[var(--fg)] text-xs uppercase tracking-[0.1em] font-semibold hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors"
+                >
+                  <Train className="h-3.5 w-3.5" />
+                  {item.text}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {filtered.length === 0 && searchQuery && (
           <div className="border-2 border-[var(--fg)] p-8 text-center">
             <p className="text-sm text-[var(--muted)]">No bookings found</p>
           </div>
