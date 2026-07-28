@@ -94,32 +94,30 @@ export class RailwayClient {
     this.fallbackProvider = new MockRailwayProvider();
 
     // Select primary provider based on configuration
-    if (this.config.useMock || !this.config.apiKey) {
-      this.primaryProvider = this.fallbackProvider;
-    } else {
-      const rapiBaseUrl = process.env.RAPI_BASE_URL || "";
-      const railKitKey = process.env.RAILKIT_API_KEY || "";
-      const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
-      const baseUrl = process.env.RAILWAY_API_BASE_URL;
+    const rapiBaseUrl = process.env.RAPI_BASE_URL || "";
+    const railKitKey = process.env.RAILKIT_API_KEY || "";
+    const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
+    const baseUrl = process.env.RAILWAY_API_BASE_URL;
 
-      if (rapiBaseUrl) {
-        // Rapi is the self-hosted free provider
-        this.primaryProvider = new RapiProvider(rapiBaseUrl);
-      } else if (railKitKey) {
-        this.primaryProvider = new RailKitProvider(railKitKey);
-      } else if (rapidApiHost) {
-        this.primaryProvider = new IRCTCRapidAPIProvider({
-          apiKey: this.config.apiKey,
-          rapidApiHost,
-          baseUrl: baseUrl || undefined,
-        });
-      } else {
-        this.primaryProvider = new IndianRailAPIProvider({
-          apiKey: this.config.apiKey,
-          rapidApiHost: undefined,
-          baseUrl: baseUrl || undefined,
-        });
-      }
+    if (rapiBaseUrl) {
+      // Rapi is the self-hosted free provider — no API key required
+      this.primaryProvider = new RapiProvider(rapiBaseUrl);
+    } else if (this.config.useMock || !this.config.apiKey) {
+      this.primaryProvider = this.fallbackProvider;
+    } else if (railKitKey) {
+      this.primaryProvider = new RailKitProvider(railKitKey);
+    } else if (rapidApiHost) {
+      this.primaryProvider = new IRCTCRapidAPIProvider({
+        apiKey: this.config.apiKey,
+        rapidApiHost,
+        baseUrl: baseUrl || undefined,
+      });
+    } else {
+      this.primaryProvider = new IndianRailAPIProvider({
+        apiKey: this.config.apiKey,
+        rapidApiHost: undefined,
+        baseUrl: baseUrl || undefined,
+      });
     }
   }
 
@@ -351,7 +349,7 @@ let globalClient: RailwayClient | null = null;
  * Get the global Railway client instance.
  * Configure via environment variables:
  *   - NEXT_PUBLIC_RAILWAY_USE_MOCK: "true" to use mock data
- *   - RAPI_BASE_URL: URL of self-hosted Rapi server (e.g. http://localhost:3001)
+ *   - RAPI_BASE_URL: URL of self-hosted Rapi server (e.g. https://raily.onrender.com)
  *   - RAILKIT_API_KEY: API key for RailKit (paid)
  *   - RAILWAY_API_KEY: API key for fallback providers (RapidAPI or direct)
  *   - RAILWAY_RAPIDAPI_HOST: RapidAPI host header
@@ -359,7 +357,8 @@ let globalClient: RailwayClient | null = null;
  */
 export function getRailwayClient(): RailwayClient {
   if (!globalClient) {
-    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY && !process.env.RAPI_BASE_URL;
+    const hasRapi = !!process.env.RAPI_BASE_URL;
+    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY && !hasRapi;
     globalClient = new RailwayClient({
       useMock,
       apiKey: process.env.RAILWAY_API_KEY || process.env.RAILKIT_API_KEY,

@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: rapi
+    env: node
+    rootDir: Rapi
+    branch: main
+    region: singapore
+    plan: free
+
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/v1/admin/health
+    autoDeploy: true
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: CACHE_TTL_PNR
+        value: "180"
+      - key: CACHE_TTL_LIVE
+        value: "120"
+      - key: CACHE_TTL_SEARCH
+        value: "600"
+      - key: CACHE_TTL_ROUTES
+        value: "86400"
+      - key: CACHE_TTL_AVAIL
+        value: "120"
+      - key: CACHE_MAX_KEYS
+        value: "5000"
+      - key: CACHE_STALE_TTL
+        value: "600"
+      - key: CACHE_MIN_INTERVAL
+        value: "30"
+      - key: ADMIN_KEY
+        sync: false
