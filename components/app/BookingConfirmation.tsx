@@ -18,7 +18,7 @@ export default function BookingConfirmation() {
   const { state, resetBooking } = useBooking();
 
   const train = state.selectedTrain;
-  const pnr = state.pnrNumber || "4785213694";
+  const pnr = state.pnrNumber || "—";
 
   return (
     <div className="space-y-6">
@@ -114,8 +114,8 @@ export default function BookingConfirmation() {
             <div className="grid grid-cols-4 gap-4">
               {[
                 { label: "PNR", value: pnr },
-                { label: "Coach", value: "B1" },
-                { label: "Seat", value: `7 (Lower)` },
+              { label: "Coach", value: state.selectedCoach || "—" },
+              { label: "Seat", value: state.selectedSeat ? `${state.selectedSeat.match(/-(\d+)/)?.[1] || '—'} (${state.seatRecommendation?.tier || '—'})` : "—" },
                 { label: "Platform", value: "5" },
               ].map((item) => (
                 <div key={item.label} className="text-center">
@@ -135,8 +135,7 @@ export default function BookingConfirmation() {
             </div>
             <div className="space-y-2">
               {[
-                { name: "A. Kumar", age: "28", berth: "B1-7 (Lower)", status: "CNF" },
-                { name: "P. Sharma", age: "32", berth: "B1-8 (Middle)", status: "CNF" },
+                { name: "Primary Passenger", age: "—", berth: `${state.selectedCoach || "B1"}-${state.selectedSeat?.match(/-(\d+)/)?.[1] || "—"} (${state.seatRecommendation?.tier || '—'})`, status: "CNF" },
               ].map((p, i) => (
                 <div
                   key={i}

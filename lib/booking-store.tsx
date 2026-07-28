@@ -114,7 +114,7 @@ const CITY_TO_CODE: Record<string, string> = {
   surat: "ST",
 };
 
-function resolveStationCode(name: string): string {
+export function resolveStationCode(name: string): string {
   const clean = name.trim().toLowerCase();
   // Direct code match (e.g., "NDLS")
   if (/^[A-Z]{2,5}$/i.test(clean)) return clean.toUpperCase();

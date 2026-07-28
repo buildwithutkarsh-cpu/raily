@@ -15,7 +15,7 @@ import {
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
-import { useBooking } from "@/lib/booking-store";
+import { useBooking, resolveStationCode } from "@/lib/booking-store";
 import type { SeatAvailabilityClass } from "@/lib/railway/types";
 
 /* ─── Types ─────────────────────────────────────────────────── */
@@ -320,8 +320,8 @@ export default function CoachVisualizer() {
   useEffect(() => {
     if (!train?.number || !query?.origin || !query?.destination) return;
 
-    const fromCode = query.origin.toUpperCase();
-    const toCode = query.destination.toUpperCase();
+    const fromCode = resolveStationCode(query.origin);
+    const toCode = resolveStationCode(query.destination);
 
     setIsLoading(true);
     setError(null);
