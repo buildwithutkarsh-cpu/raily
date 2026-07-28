@@ -19,6 +19,7 @@ import axios, { AxiosInstance } from "axios";
 import { wrapper } from "axios-cookiejar-support";
 import { CookieJar } from "tough-cookie";
 import { createWorker, Worker } from "tesseract.js";
+import Jimp from "jimp";
 import { ScrapeResult, ok, cachedRes, fail } from "./client";
 import { ERROR_CODES } from "../utils/errors";
 import { cache } from "../cache";
@@ -134,16 +135,32 @@ async function solveCaptcha(): Promise<string> {
 
   const imgBuffer = Buffer.from(imgResp.data);
 
-  // 2. OCR the captcha image using tesseract.js (singleton worker)
+  // 2. Preprocess the captcha image for better OCR accuracy
+  //    The IR captcha has colored noise over simple math text
+  let processedBuffer: Buffer;
+  try {
+    const image = await Jimp.read(imgBuffer);
+    processedBuffer = await image
+      .greyscale()                         // Remove color noise
+      .contrast(0.5)                       // Increase contrast
+      .normalize()                         // Normalize brightness
+      .scale(2)                            // Upscale 2x for better OCR on small digits
+      .getBufferAsync(Jimp.MIME_PNG);
+  } catch {
+    // If preprocessing fails, fall back to raw image
+    processedBuffer = imgBuffer;
+  }
+
+  // 3. OCR the preprocessed captcha image using tesseract.js (singleton worker)
   const worker = await getTessWorker();
-  const { data } = await worker.recognize(imgBuffer);
+  const { data } = await worker.recognize(processedBuffer);
   const text = data.text?.trim() || "";
 
   if (!text) {
     throw new Error("CAPTCHA_OCR_EMPTY");
   }
 
-  // 3. Parse the math expression
+  // 4. Parse the math expression
   // Format is like "5+3=" or "9-4="
   // The = sign may or may not be there
   const cleanText = text.replace(/\s/g, "").replace(/[=:]/g, "");
