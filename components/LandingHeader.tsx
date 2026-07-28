@@ -1,28 +1,79 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
 import { TrainFront, Menu, X } from "lucide-react";
+import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
+
+gsap.registerPlugin(ScrollTrigger);
 
 export default function LandingHeader() {
   const { isLoaded, isSignedIn } = useAuth();
-  const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
 
+  // ── GSAP header entrance + scroll direction hide/show ──
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 50);
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    // Respect reduced motion — skip GSAP animations
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const header = headerRef.current;
+    if (!header) return;
+
+    const ctx = gsap.context(() => {
+      // Entrance: slide down from above
+      gsap.fromTo(
+        header,
+        { y: -80, opacity: 0 },
+        {
+          y: 0,
+          opacity: 1,
+          duration: 0.8,
+          ease: "power3.out",
+          delay: 0.2,
+        }
+      );
+
+      // Scroll direction: hide on scroll down, show on scroll up
+      // Only apply once past the hero section
+      let lastScroll = 0;
+
+      ScrollTrigger.create({
+        start: 100,
+        end: 999999,
+        onUpdate: (self) => {
+          const direction = self.direction;
+          if (direction === -1 && lastScroll > 100) {
+            // Scrolling up — show header
+            gsap.to(header, {
+              y: 0,
+              duration: 0.3,
+              ease: "power2.out",
+              overwrite: "auto",
+            });
+          } else if (direction === 1) {
+            // Scrolling down — hide header
+            gsap.to(header, {
+              y: -80,
+              duration: 0.3,
+              ease: "power2.in",
+              overwrite: "auto",
+            });
+          }
+          lastScroll = self.scroll();
+        },
+      });
+    });
+
+    return () => ctx.revert();
   }, []);
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-[200] transition-all duration-300 ${
-        scrolled
-          ? "bg-[var(--bg)]/95 backdrop-blur-sm border-b-2 border-[var(--fg)]"
-          : "bg-transparent"
-      }`}
+      ref={headerRef}
+      className="fixed top-0 left-0 right-0 z-[200] bg-[var(--bg)]/95 backdrop-blur-sm border-b-2 border-[var(--fg)]"
     >
       <div className="max-w-7xl mx-auto px-6 h-[60px] flex items-center justify-between">
         {/* Brand */}

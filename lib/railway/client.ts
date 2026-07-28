@@ -89,7 +89,13 @@ export class RailwayClient {
     if (this.config.useMock || !this.config.apiKey) {
       this.provider = new MockRailwayProvider();
     } else {
-      this.provider = new IndianRailAPIProvider(this.config.apiKey);
+      const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST;
+      const baseUrl = process.env.RAILWAY_API_BASE_URL;
+      this.provider = new IndianRailAPIProvider({
+        apiKey: this.config.apiKey,
+        rapidApiHost: rapidApiHost || undefined,
+        baseUrl: baseUrl || undefined,
+      });
     }
   }
 
@@ -284,7 +290,9 @@ let globalClient: RailwayClient | null = null;
  * Get the global Railway client instance.
  * Configure via environment variables:
  *   - NEXT_PUBLIC_RAILWAY_USE_MOCK: "true" to use mock data
- *   - RAILWAY_API_KEY: API key for the real provider
+ *   - RAILWAY_API_KEY: API key for the real provider (RapidAPI or direct)
+ *   - RAILWAY_RAPIDAPI_HOST: RapidAPI host header (if using RapidAPI)
+ *   - RAILWAY_API_BASE_URL: Custom base URL (defaults to indianrailapi.com)
  */
 export function getRailwayClient(): RailwayClient {
   if (!globalClient) {
@@ -296,6 +304,8 @@ export function getRailwayClient(): RailwayClient {
   }
   return globalClient;
 }
+
+
 
 /** Reset the global client (useful for testing) */
 export function resetRailwayClient(): void {

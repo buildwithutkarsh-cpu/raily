@@ -50,7 +50,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
-  cursor: none; /* custom cursor handled by Cursor.tsx */
 }
 
 html {
@@ -95,15 +94,26 @@ body::before {
   width: 8px;
   height: 8px;
   background: var(--fg);
+  border: 1px solid var(--bg);
   pointer-events: none;
   z-index: 10000;
   transform: translate(-50%, -50%);
-  transition: width 0.2s ease, height 0.2s ease;
+  opacity: 0;
+  display: none;
+  transition: width 0.2s ease, height 0.2s ease, background 0.2s ease;
 }
 
 .custom-cursor.expanded {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  background: var(--railway-red);
+}
+
+/* On touch devices, never show the custom cursor */
+@media (hover: none) and (pointer: coarse) {
+  .custom-cursor {
+    display: none !important;
+  }
 }
 
 /* ─── CINEMATIC MODULES ────────────────────────────────────── */
@@ -121,7 +131,6 @@ body::before {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  /* Base transform for mouse perspective — set via JS */
   will-change: transform;
 }
 
@@ -137,7 +146,7 @@ body::before {
   gap: 0;
   user-select: none;
   position: relative;
-  z-index: 3; /* Above INDIA */
+  z-index: 3;
   will-change: transform, opacity;
 }
 
@@ -161,7 +170,7 @@ body::before {
   clip-path: inset(0 100% 0 0);
   pointer-events: none;
   white-space: nowrap;
-  z-index: 1; /* Behind RAILY */
+  z-index: 1;
   will-change: clip-path, transform, opacity;
 }
 
@@ -285,7 +294,6 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   transition: all 0.15s ease;
-  cursor: none;
   position: relative;
 }
 
@@ -309,7 +317,6 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   transition: all 0.15s ease;
-  cursor: none;
 }
 
 .btn-secondary:hover {
@@ -330,7 +337,6 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   transition: opacity 0.15s;
-  cursor: none;
 }
 
 .btn-ghost:hover {
@@ -352,7 +358,6 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.15em;
   transition: all 0.2s ease;
-  cursor: none;
   position: relative;
   overflow: hidden;
 }
@@ -387,7 +392,6 @@ body::before {
   border: 2px solid var(--fg);
   background: var(--bg);
   position: relative;
-  transition: none;
 }
 
 .card:hover {
@@ -413,7 +417,6 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   transition: all 0.15s ease;
-  cursor: none;
 }
 
 .chip:hover {
@@ -486,7 +489,6 @@ body::before {
   height: 40px;
   border: 2px solid var(--fg);
   transition: all 0.15s ease;
-  cursor: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -508,7 +510,6 @@ body::before {
   background: var(--fg);
   opacity: 0.3;
   border-color: var(--fg);
-  cursor: none;
 }
 
 .seat-selected {
@@ -620,6 +621,11 @@ button, input, textarea, select {
 @keyframes typingDot {
   0%, 100% { opacity: 0.3; transform: scale(0.8); }
   50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes train-track {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100vw); }
 }
 
 /* ─── Railway-specific accents ─────────────────────────────── */

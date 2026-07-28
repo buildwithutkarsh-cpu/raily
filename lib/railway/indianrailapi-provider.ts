@@ -1,12 +1,10 @@
 /* ══════════════════════════════════════════════════════════════
-   RAILWAY — Indian Rail API Provider (indianrailapi.com)
-   Real API provider that fetches live railway data.
+   RAILWAY — Indian Rail API Provider
+   Supports both direct API key (indianrailapi.com) and
+   RapidAPI (x-rapidapi-key + x-rapidapi-host) authentication.
    
    Docs: https://indianrailapi.com/api-collection
-   
-   NOTE: This provider requires an API key. If no key is set,
-   it will gracefully fall back to throwing descriptive errors
-   that the RailwayClient will catch and report as friendly messages.
+   RapidAPI: https://rapidapi.com/... (search "Indian Railways")
    ══════════════════════════════════════════════════════════════ */
 
 import type { RailwayProvider, TrainSearchParams, SeatAvailabilityParams, FareParams } from "./provider";
@@ -23,22 +21,44 @@ import type {
 } from "./types";
 import { RailwayAPIError, RailwayRateLimitError } from "./client";
 
-const BASE_URL = "https://indianrailapi.com/api/v2";
+interface ProviderConfig {
+  /** API key (used as `apikey` query param for direct API) */
+  apiKey: string;
+  /** RapidAPI host header value (set when using RapidAPI gateway) */
+  rapidApiHost?: string;
+  /** Base URL for the API */
+  baseUrl?: string;
+}
+
+const DEFAULT_BASE_URL = "https://indianrailapi.com/api/v2";
 
 export class IndianRailAPIProvider implements RailwayProvider {
-  name = "Indian Rail API (indianrailapi.com)";
+  name = "Indian Railways API";
   private apiKey: string;
+  private rapidApiHost: string | null;
+  private baseUrl: string;
   private lastRequestTime = 0;
   private readonly minRequestInterval = 200; // 200ms between requests
 
-  constructor(apiKey: string) {
-    if (!apiKey) {
+  constructor(config: ProviderConfig) {
+    this.apiKey = config.apiKey;
+    this.rapidApiHost = config.rapidApiHost || null;
+
+    // Auto-derive base URL from RapidAPI host, else use default or custom
+    if (config.baseUrl) {
+      this.baseUrl = config.baseUrl;
+    } else if (this.rapidApiHost) {
+      this.baseUrl = `https://${this.rapidApiHost}`;
+    } else {
+      this.baseUrl = DEFAULT_BASE_URL;
+    }
+
+    if (!this.apiKey) {
       console.warn(
         "[IndianRailAPIProvider] No API key provided. " +
-        "Set RAILWAY_API_KEY environment variable. Falling back to mock data."
+        "Set RAILWAY_API_KEY environment variable."
       );
     }
-    this.apiKey = apiKey;
   }
 
   /* ─── Station Search ──────────────────────────────────────── */
@@ -312,6 +332,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
   /* ─── Live Status ─────────────────────────────────────────── */
 
   async getLiveStatus(trainNumber: string, station?: string): Promise<LiveStatus> {
+    void station;
     const data = await this.fetch<{
       data: {
         train_number: string;
@@ -416,7 +437,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
   ): Promise<T> {
     if (!this.apiKey) {
       throw new RailwayAPIError(
-        "Indian Rail API key not configured. Set RAILWAY_API_KEY environment variable.",
+        "Railway API key not configured. Set the RAILWAY_API_KEY environment variable.",
         "NO_API_KEY",
         401
       );
@@ -431,8 +452,23 @@ export class IndianRailAPIProvider implements RailwayProvider {
     this.lastRequestTime = Date.now();
 
     // Build URL
-    const url = new URL(`${BASE_URL}${path}`);
-    url.searchParams.set("apikey", this.apiKey);
+    const url = new URL(`${this.baseUrl}${path}`);
+
+    // Build headers
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+    };
+
+    if (this.rapidApiHost) {
+      // RapidAPI auth: use headers
+      headers["x-rapidapi-key"] = this.apiKey;
+      headers["x-rapidapi-host"] = this.rapidApiHost;
+    } else {
+      // Direct API auth: pass apikey as query param
+      url.searchParams.set("apikey", this.apiKey);
+    }
+
+    // Add query params
     Object.entries(params).forEach(([key, value]) => {
       if (value) url.searchParams.set(key, value);
     });
@@ -443,7 +479,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
     try {
       const response = await fetch(url.toString(), {
         signal: controller.signal,
-        headers: { Accept: "application/json" },
+        headers,
       });
 
       if (response.status === 429) {
@@ -485,7 +521,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
 /* ─── Helpers ──────────────────────────────────────────────── */
 
 function inferTrainType(name: string, number: string): TrainSearchEntry["train"]["type"] {
-  void number; // unused but kept for API compatibility
+  void number;
   const upper = name.toUpperCase();
   if (upper.includes("RAJDHANI")) return "RAJDHANI";
   if (upper.includes("SHATABDI")) return "SHATABDI";
