@@ -30,6 +30,7 @@
     "express": "^4.21.0",
     "express-rate-limit": "^8.6.1",
     "node-cache": "^5.1.2",
+    "tesseract.js": "^5.1.1",
     "tough-cookie": "^4.1.4"
   },
   "devDependencies": {

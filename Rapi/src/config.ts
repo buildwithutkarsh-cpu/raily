@@ -44,9 +44,9 @@ export const SOURCES = {
   TRAIN_ROUTE: (trainId: string) =>
     `https://erail.in/data.aspx?Action=TRAINROUTE&Password=2012&Data1=${trainId}&Data2=0&Cache=true`,
 
-  /* confirmtkt endpoint */
+  /* Indian Railways official PNR endpoint (via CommonCaptcha with CAPTCHA) */
   PNR_STATUS: (pnr: string) =>
-    `https://www.confirmtkt.com/pnr-status/${pnr}`,
+    `https://www.indianrail.gov.in/enquiry/CommonCaptcha?inputPnrNo=${pnr}&inputPage=PNR&language=en`,
 
   /* etrain.info endpoint */
   LIVE_STATUS: (trainNo: string, date: string) =>

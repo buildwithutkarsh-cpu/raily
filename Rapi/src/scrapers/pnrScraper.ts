@@ -1,25 +1,28 @@
 /* ══════════════════════════════════════════════════════════════
    RAPI — PNR Status Scraper
    
-   Source: confirmtkt.com (HTML → cheerio DOM parsing + embedded JSON)
+   Source: Indian Railways Official Enquiry Portal
+   (https://www.indianrail.gov.in/enquiry/)
    
    Strategy:
-     1. Try cheerio DOM parsing with flexible CSS selector fallbacks
-     2. Fall back to embedded JSON extraction (`var data = {...}`)
-     3. If both fail, return structured error with retryable=true
+     1. Get a session cookie from Indian Railways
+     2. Download the CAPTCHA image (simple math: "5+3=" or "9-4=")
+     3. OCR the CAPTCHA using tesseract.js (singleton worker)
+     4. Solve the math problem
+     5. Submit the PNR request with the captcha solution
+     6. Parse the JSON response
    
-   DOM Resiliency:
-     - Multiple selector paths for each field
-     - Sanitizes whitespace, \\n, \\t, &nbsp; via `clean()` utility
-     - Returns null instead of throwing on parse failures
+   This is the same approach used by erail.in for PNR status.
    ══════════════════════════════════════════════════════════════ */
 
-import * as cheerio from "cheerio";
-import { scraperClient, ScrapeResult, ok, cachedRes, fail } from "./client";
+import axios, { AxiosInstance } from "axios";
+import { wrapper } from "axios-cookiejar-support";
+import { CookieJar } from "tough-cookie";
+import { createWorker, Worker } from "tesseract.js";
+import { ScrapeResult, ok, cachedRes, fail } from "./client";
 import { ERROR_CODES } from "../utils/errors";
 import { cache } from "../cache";
-import { SOURCES, CONFIG } from "../config";
-import { clean } from "../utils/parser";
+import { CONFIG } from "../config";
 
 /* ─── Types ────────────────────────────────────────────────── */
 
@@ -59,360 +62,218 @@ export interface PNRResponse {
   passengers: PassengerInfo[];
 }
 
-/* ─── DOM Parsing: Fallback Selectors ──────────────────────── */
+/* ─── IR Session Client ───────────────────────────────────── */
 
-interface DOMExtract {
-  pnr?: string;
-  trainNo?: string;
-  trainName?: string;
-  journeyDate?: string;
-  class?: string;
-  quota?: string;
-  from?: { code?: string; name?: string };
-  to?: { code?: string; name?: string };
-  boardingPoint?: { code?: string; name?: string };
-  distance?: number;
-  chartStatus?: string;
-  fare?: number;
-  passengers?: Array<{
-    serialNumber?: string;
-    bookingStatus?: string;
-    bookingCoach?: string;
-    bookingBerth?: string;
-    bookingDetails?: string;
-    currentStatus?: string;
-    currentCoach?: string;
-    currentBerth?: string;
-    currentDetails?: string;
-  }>;
+const IR_BASE = "https://www.indianrail.gov.in";
+const IR_CAPTCHA_URL = `${IR_BASE}/enquiry/captchaDraw.png`;
+const IR_PNR_URL = `${IR_BASE}/enquiry/CommonCaptcha`;
+
+// Shared cookie jar + axios instance for the IR session
+let irCookieJar: CookieJar | null = null;
+let irClient: AxiosInstance | null = null;
+
+function resetIRSession(): void {
+  irCookieJar = null;
+  irClient = null;
 }
 
-/**
- * Parse PNR status from confirmtkt HTML DOM.
- * Uses multiple CSS selector fallbacks for DOM resiliency.
- */
-function parsePNRDOM(html: string): DOMExtract | null {
-  try {
-    const $ = cheerio.load(html);
-    const result: DOMExtract = {};
+function getIRClient(): AxiosInstance {
+  if (!irClient) {
+    irCookieJar = new CookieJar();
+    irClient = wrapper(
+      axios.create({
+        timeout: 15_000,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 500,
+        withCredentials: true,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+        },
+      })
+    );
+    (irClient.defaults as any).jar = irCookieJar;
+    (irClient.defaults as any).withCredentials = true;
+  }
+  return irClient;
+}
 
-    // ── Train Info ──────────────────────────────────────────
-    // Try multiple selector patterns for train number and name
-    result.trainNo =
-      clean($(".train-number").text()) ||
-      clean($("[data-testid='train-number']").text()) ||
-      clean($(".pnr-train-info .train-no").text()) ||
-      clean($(".train-info .train-no").text()) ||
-      "";
+/* ─── Singleton Tesseract Worker ──────────────────────────── */
 
-    result.trainName =
-      clean($(".train-name").text()) ||
-      clean($("[data-testid='train-name']").text()) ||
-      clean($(".pnr-train-info .train-name").text()) ||
-      clean($(".train-info .train-name").text()) ||
-      "";
+let tessWorker: Worker | null = null;
 
-    // ── Journey Details ────────────────────────────────────
-    result.journeyDate =
-      clean($(".journey-date").text()) ||
-      clean($("[data-testid='journey-date']").text()) ||
-      clean($(".pnr-detail .date").text()) ||
-      clean($(".detail-row .date-value").text()) ||
-      "";
-
-    result.class =
-      clean($(".travel-class").text()) ||
-      clean($("[data-testid='class']").text()) ||
-      clean($(".pnr-detail .class").text()) ||
-      clean($(".detail-row .class-value").text()) ||
-      "";
-
-    result.quota =
-      clean($(".quota").text()) ||
-      clean($("[data-testid='quota']").text()) ||
-      clean($(".pnr-detail .quota").text()) ||
-      "GN";
-
-    // ── Station Info ───────────────────────────────────────
-    result.from = {
-      name:
-        clean($(".from-station .station-name").text()) ||
-        clean($("[data-testid='from-station']").text()) ||
-        clean($(".source-station").text()) ||
-        "",
-    };
-
-    result.to = {
-      name:
-        clean($(".to-station .station-name").text()) ||
-        clean($("[data-testid='to-station']").text()) ||
-        clean($(".destination-station").text()) ||
-        "",
-    };
-
-    // Try to extract station codes from text like "NDLS - New Delhi"
-    const fromText = result.from?.name || "";
-    const toText = result.to?.name || "";
-    const fromCodeMatch = fromText.match(/^([A-Z]{2,5})\s/);
-    const toCodeMatch = toText.match(/^([A-Z]{2,5})\s/);
-    if (fromCodeMatch) result.from!.code = fromCodeMatch[1];
-    if (toCodeMatch) result.to!.code = toCodeMatch[1];
-
-    // ── Chart Status ───────────────────────────────────────
-    const chartText = clean($(".chart-status").text()) ||
-      clean($("[data-testid='chart-status']").text()) ||
-      clean($(".pnr-status .chart-prepare-status").text()) ||
-      "";
-
-    result.chartStatus = chartText || "Chart Not Prepared";
-
-    // ── Fare ───────────────────────────────────────────────
-    const fareText = clean($(".total-fare").text()) ||
-      clean($("[data-testid='fare']").text()) ||
-      clean($(".pnr-detail .fare-amount").text()) ||
-      "";
-    const fareMatch = fareText.match(/[\d,]+/);
-    result.fare = fareMatch ? parseInt(fareMatch[0].replace(/,/g, "")) : 0;
-
-    // ── Passenger Table ────────────────────────────────────
-    // Try multiple selector patterns for the passenger table
-    const passengers: DOMExtract["passengers"] = [];
-
-    // Pattern 1: Table with passenger rows
-    $(
-      "table.passenger-table tbody tr, " +
-      ".passenger-details tbody tr, " +
-      ".pnr-passengers tbody tr, " +
-      "[data-testid='passenger-table'] tbody tr, " +
-      ".passenger-list .passenger-item, " +
-      ".passenger-row"
-    ).each((_i: number, row: any) => {
-      const cells = $(row).find("td, .passenger-col, .col");
-      const passenger: NonNullable<typeof passengers>[0] = {};
-
-      // Serial number / name
-      passenger.serialNumber =
-        clean($(cells[0] || row).text()) ||
-        `Passenger ${_i + 1}`;
-
-      // Booking status (usually in cells[1] or cell with class .booking-status)
-      const bookingEl = $(row).find(
-        ".booking-status, .booked-status, [data-label='Booking']"
-      );
-      passenger.bookingStatus = clean(bookingEl.text()) ||
-        clean($(cells[1]).text()) || "";
-
-      // Current status (usually in cells[2] or cell with class .current-status)
-      const currentEl = $(row).find(
-        ".current-status, .live-status, [data-label='Current']"
-      );
-      passenger.currentStatus = clean(currentEl.text()) ||
-        clean($(cells[2]).text()) || "";
-
-      // Booking details (coach/berth info)
-      passenger.bookingDetails = clean(
-        $(row).find(".booking-details, .booked-details").text()
-      ) || passenger.bookingStatus;
-
-      // Current details
-      passenger.currentDetails = clean(
-        $(row).find(".current-details, .live-details").text()
-      ) || passenger.currentStatus;
-
-      passengers.push(passenger);
+async function getTessWorker(): Promise<Worker> {
+  if (!tessWorker) {
+    tessWorker = await createWorker("eng", 1, {
+      logger: () => {}, // silence logs
     });
-
-    // Pattern 2: Div-based layout with passenger cards
-    if (passengers.length === 0) {
-      $(
-        ".passenger-card, .passenger-info, .berth-info, " +
-        "[data-testid='passenger']"
-      ).each((_i: number, card: any) => {
-        const passenger: NonNullable<typeof passengers>[0] = {};
-
-        passenger.serialNumber =
-          clean($(card).find(".passenger-sr, .sr-no, .passenger-name").text()) ||
-          `Passenger ${_i + 1}`;
-
-        passenger.bookingStatus =
-          clean($(card).find(".booking-status, .book-status").text()) || "";
-
-        passenger.bookingDetails =
-          clean($(card).find(".booking-coach, .coach-info").text()) || "";
-
-        passenger.currentStatus =
-          clean($(card).find(".current-status, .live-status").text()) || "";
-
-        passenger.currentDetails =
-          clean($(card).find(".current-coach, .live-detail").text()) || "";
-
-        // Extract coach and berth from text like "B1 45, Coach B1, Berth 45"
-        const bookingCoachMatch = passenger.bookingDetails?.match(/([A-Z]\d+)\s*(\d+)/);
-        if (bookingCoachMatch) {
-          passenger.bookingCoach = bookingCoachMatch[1];
-          passenger.bookingBerth = bookingCoachMatch[2];
-        }
-
-        const currentCoachMatch = passenger.currentDetails?.match(/([A-Z]\d+)\s*(\d+)/);
-        if (currentCoachMatch) {
-          passenger.currentCoach = currentCoachMatch[1];
-          passenger.currentBerth = currentCoachMatch[2];
-        }
-
-        passengers.push(passenger);
-      });
-    }
-
-    result.passengers = passengers;
-    return result;
-  } catch (err: any) {
-    console.warn("[PNR] DOM parsing failed, falling back to JSON extraction:", err.message);
-    return null;
   }
+  return tessWorker;
 }
 
 /**
- * Extract embedded JSON from confirmtkt PNR page.
- * The page has: var data = {...}; or window.__INITIAL_STATE__ = {...};
+ * Fetch the Indian Railways CAPTCHA image and solve it.
+ * The captcha is a simple math expression like "5+3=" or "9-4=".
+ * Returns the numerical result as a string.
  */
-function parseEmbeddedJSON(html: string): any {
-  // Pattern 1: var data = {...};
-  const dataMatch = html.match(/var\s+data\s*=\s*({.*?});/s);
-  if (dataMatch) {
-    try {
-      return JSON.parse(dataMatch[1]);
-    } catch {
-      // Continue to next pattern
-    }
-  }
+async function solveCaptcha(): Promise<string> {
+  const client = getIRClient();
+  const ts = Date.now();
 
-  // Pattern 2: window.__INITIAL_STATE__ = {...};
-  const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.*?});/s);
-  if (stateMatch) {
-    try {
-      return JSON.parse(stateMatch[1]);
-    } catch {
-      // Continue to next pattern
-    }
-  }
-
-  // Pattern 3: JSON-LD script tag
-  const jsonLdMatch = html.match(
-    /<script[^>]*type="application\/ld\+json"[^>]*>(.*?)<\/script>/s
-  );
-  if (jsonLdMatch) {
-    try {
-      return JSON.parse(jsonLdMatch[1]);
-    } catch {
-      // Continue to next pattern
-    }
-  }
-
-  // Pattern 4: Any JSON object in a script tag with __NEXT_DATA__
-  const nextMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
-  if (nextMatch) {
-    try {
-      return JSON.parse(nextMatch[1]);
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Normalize JSON data into our PNRResponse schema with fallback
- * field name mapping for multiple upstream source formats.
- */
-function normalizeFromJSON(raw: any, pnr: string): PNRResponse | null {
-  if (!raw) return null;
-
-  // Flexible field name mapping — handles different API response shapes
-  const getField = (obj: any, ...keys: string[]) => {
-    for (const key of keys) {
-      const val = obj?.[key];
-      if (val !== undefined && val !== null) return val;
-    }
-    return undefined;
-  };
-
-  const passengers: PassengerInfo[] = [];
-
-  // Extract passenger list from various possible locations
-  const rawPassengers =
-    raw.passengers ||
-    raw.passenger ||
-    raw.passenger_details ||
-    raw.pnr_data?.passengers ||
-    raw.data?.passengers ||
-    [];
-
-  (rawPassengers || []).forEach((p: any) => {
-    passengers.push({
-      serialNumber: getField(p, "serial_number", "serialNumber", "passenger_serial_number") || `Passenger ${passengers.length + 1}`,
-      coachPosition: getField(p, "coach_position", "coachPosition") || 0,
-      booking: {
-        status: getField(p, "booking_status", "bookingStatus", "booking.status") || "",
-        coach: getField(p, "booking_coach", "bookingCoach", "booking.coach") || null,
-        berthNo: getField(p, "booking_berth_no", "bookingBerthNo", "booking.berthNo") ?? null,
-        berthCode: getField(p, "booking_berth_code", "bookingBerthCode", "booking.berthCode") || null,
-        details: getField(p, "booking_status_details", "bookingStatusDetails", "booking.details") || "",
-      },
-      current: {
-        status: getField(p, "current_status", "currentStatus", "current.status") || "",
-        coach: getField(p, "current_coach", "currentCoach", "current.coach") || null,
-        berthNo: getField(p, "current_berth_no", "currentBerthNo", "current.berthNo") ?? null,
-        berthCode: getField(p, "current_berth_code", "currentBerthCode", "current.berthCode") || null,
-        details: getField(p, "current_status_details", "currentStatusDetails", "current.details") || "",
-      },
-    });
+  // 1. Initiate session by hitting the captcha endpoint
+  const imgResp = await client.get(`${IR_CAPTCHA_URL}?${ts}`, {
+    responseType: "arraybuffer",
+    headers: {
+      Accept: "image/png,image/*;q=0.9,*/*;q=0.8",
+      Referer: `${IR_BASE}/enquiry/PNRStatus.html`,
+    },
   });
 
-  // Extract journey details with fallback field names
-  const journey = raw.journey || raw.journey_details || raw.trip || {};
+  const imgBuffer = Buffer.from(imgResp.data);
 
-  const getStation = (station: any) => {
-    if (!station) return { code: "", name: "" };
-    if (typeof station === "string") return { code: station, name: station };
-    return {
-      code: getField(station, "code", "station_code", "stationCode", "stn_code") || "",
-      name: getField(station, "name", "station_name", "stationName", "stn_name") || "",
-    };
-  };
+  // 2. OCR the captcha image using tesseract.js (singleton worker)
+  const worker = await getTessWorker();
+  const { data } = await worker.recognize(imgBuffer);
+  const text = data.text?.trim() || "";
+
+  if (!text) {
+    throw new Error("CAPTCHA_OCR_EMPTY");
+  }
+
+  // 3. Parse the math expression
+  // Format is like "5+3=" or "9-4="
+  // The = sign may or may not be there
+  const cleanText = text.replace(/\s/g, "").replace(/[=:]/g, "");
+
+  let result = 0;
+  let extracted = false;
+
+  if (cleanText.includes("+")) {
+    const parts = cleanText.split("+");
+    const a = parseInt(parts[0]?.replace(/\D/g, ""));
+    const b = parseInt(parts[1]?.replace(/\D/g, ""));
+    if (!isNaN(a) && !isNaN(b)) {
+      result = a + b;
+      extracted = true;
+    }
+  } else if (cleanText.includes("-")) {
+    const parts = cleanText.split("-");
+    const a = parseInt(parts[0]?.replace(/\D/g, ""));
+    const b = parseInt(parts[1]?.replace(/\D/g, ""));
+    if (!isNaN(a) && !isNaN(b)) {
+      result = a - b;
+      extracted = true;
+    }
+  }
+
+  if (!extracted) {
+    throw new Error(`CAPTCHA_OCR_FAILED: raw="${cleanText}"`);
+  }
+
+  return String(result);
+}
+
+/**
+ * Parse the Indian Railways PNR response JSON into our PNRResponse format.
+ */
+function parseIRResponse(data: any, pnr: string): PNRResponse | null {
+  if (!data || data.errorMessage || !data.result) {
+    return null;
+  }
+
+  const r = data.result;
+
+  // Build passenger list from the passenger properties
+  const passengers: PassengerInfo[] = [];
+  
+  // Indian Railways returns passengers as named properties: passenger1, passenger2, etc.
+  const passengerKeys = Object.keys(r).filter((k) =>
+    k.toLowerCase().startsWith("passenger")
+  );
+
+  if (passengerKeys.length > 0) {
+    passengerKeys.forEach((key, idx) => {
+      const p = r[key];
+      if (!p) return;
+
+      const bookingStatus = p.booking_status || p.bookingStatus || "";
+      const currentStatus = p.current_status || p.currentStatus || "";
+
+      // Parse coach and berth info from status strings
+      // e.g., "B1 45, CNF" or "S5 032, WL 15"
+      const parseCoachBerth = (status: string) => {
+        const match = status.match(/([A-Z]+\d+)\s+(\d+)/);
+        return {
+          coach: match ? match[1] : null,
+          berthNo: match ? parseInt(match[2]) : null,
+        };
+      };
+
+      const bookingInfo = parseCoachBerth(bookingStatus);
+      const currentInfo = parseCoachBerth(currentStatus);
+
+      passengers.push({
+        serialNumber: `${idx + 1}`,
+        coachPosition: parseInt(p.coach_position || p.coachPosition || "0"),
+        booking: {
+          status: bookingStatus,
+          coach: bookingInfo.coach,
+          berthNo: bookingInfo.berthNo,
+          berthCode: null,
+          details: bookingStatus,
+        },
+        current: {
+          status: currentStatus,
+          coach: currentInfo.coach,
+          berthNo: currentInfo.berthNo,
+          berthCode: null,
+          details: currentStatus,
+        },
+      });
+    });
+  }
+
+  // Extract journey date (DOJ)
+  const doj = r.doj || r.date_of_journey || r.journey_date || "";
 
   return {
-    pnr: getField(raw, "pnr", "pnr_number", "pnrNumber") || pnr,
+    pnr,
     train: {
-      number: getField(raw, "train_number", "trainNumber", "train.number", "train_no")?.toString() || "",
-      name: getField(raw, "train_name", "trainName", "train.name") || "",
+      number: r.train_no || r.trainno || r.train_number || "",
+      name: r.train_name || r.name || r.trainName || "",
     },
     journey: {
-      date: getField(journey, "date_of_journey", "dateOfJourney", "date", "journey_date") || "",
-      class: getField(journey, "class", "class_name", "travel_class") || "",
-      quota: getField(journey, "quota") || "GN",
-      source: getStation(getField(raw, "source_station", "sourceStation", "from", "source") || journey.source),
-      destination: getStation(getField(raw, "dest_station", "destStation", "destination", "to", "dest") || journey.destination),
-      boardingPoint: getStation(
-        getField(raw, "boarding_point", "boardingPoint") ||
-        getField(raw, "boarding_station", "boardingStation") ||
-        journey.boardingPoint ||
-        journey.source
-      ),
-      distance: getField(raw, "distance", "total_distance") || getField(journey, "distance") || 0,
+      date: doj,
+      class: r.class || r.travel_class || r.travelClass || "",
+      quota: r.quota || r.quota_code || r.quotaCode || "GN",
+      source: {
+        code: r.from_stn || r.fromStn || r.source_station || r.from || "",
+        name: r.from_stn_name || r.fromStnName || r.source_station_name || "",
+      },
+      destination: {
+        code: r.to_stn || r.toStn || r.dest_station || r.to || "",
+        name: r.to_stn_name || r.toStnName || r.dest_station_name || "",
+      },
+      boardingPoint: {
+        code:
+          r.boarding_point || r.boardingPoint || r.from_stn || r.from || "",
+        name: r.boarding_point_name || r.boardingPointName || "",
+      },
+      distance: parseInt(r.distance || "0"),
     },
     chart: {
-      status: getField(raw, "chart_status", "chartStatus", "chart.status", "chart_prepared") || "Chart Not Prepared",
-      prepared: !!(
-        getField(raw, "chart_status", "chartStatus", "chart.status", "chart_prepared") &&
-        String(getField(raw, "chart_status", "chartStatus", "chart.status", "chart_prepared"))
-          .toLowerCase().includes("prepared")
-      ),
+      status: r.chart || r.chart_status || r.chartStatus || "NOT PREPARED",
+      prepared: (
+        r.chart || r.chart_status || r.chartStatus || ""
+      ).toUpperCase().includes("PREPARED"),
     },
     booking: {
-      fare: getField(raw, "total_fare", "totalFare", "fare", "booking.fare") || 0,
-      ticketFare: getField(raw, "ticket_fare", "ticketFare") || 0,
-      bookingDate: getField(raw, "booking_date", "bookingDate", "date_of_booking") || "",
+      fare: parseInt(r.fare || r.total_fare || r.totalFare || "0"),
+      ticketFare: parseInt(r.ticket_fare || r.ticketFare || "0"),
+      bookingDate: r.booking_date || r.bookingDate || "",
     },
     passengers,
   };
@@ -420,107 +281,169 @@ function normalizeFromJSON(raw: any, pnr: string): PNRResponse | null {
 
 /* ─── Main Scraper Function ───────────────────────────────── */
 
-export async function getPNRStatus(pnr: string): Promise<ScrapeResult<PNRResponse>> {
-  // Validate
+export async function getPNRStatus(
+  pnr: string
+): Promise<ScrapeResult<PNRResponse>> {
+  // Validate PNR format
   if (!/^\d{10}$/.test(pnr)) {
-    return fail(ERROR_CODES.INVALID_INPUT, "PNR must be exactly 10 digits");
+    return fail(
+      ERROR_CODES.INVALID_INPUT,
+      "PNR must be exactly 10 digits"
+    );
   }
 
   const cacheKey = `pnr:${pnr}`;
 
-  return cache.getOrRefresh<PNRResponse>(
-    cacheKey,
-    CONFIG.CACHE.PNR_TTL,
-    async () => {
-      const html = await scraperClient.get(
-        SOURCES.PNR_STATUS(pnr),
-        "https://www.confirmtkt.com/"
-      );
+  return cache
+    .getOrRefresh<PNRResponse>(
+      cacheKey,
+      CONFIG.CACHE.PNR_TTL,
+      async () => {
+        // 1. Solve the CAPTCHA
+        let captchaSolution: string;
+        try {
+          captchaSolution = await solveCaptcha();
+        } catch (err: any) {
+          // Reset session on captcha failure
+          resetIRSession();
+          throw new Error(
+            `CAPTCHA_SOLVE_FAILED: ${err.message || "Could not solve captcha"}`
+          );
+        }
 
-      const domParsed = parsePNRDOM(html);
-      const jsonParsed = parseEmbeddedJSON(html);
+        const ts = Date.now();
 
-      let result: PNRResponse | null = null;
+        // 2. Make the PNR status request with the captcha solution
+        const client = getIRClient();
+        let resp;
+        try {
+          resp = await client.get(IR_PNR_URL, {
+            params: {
+              inputPnrNo: pnr,
+              inputPage: "PNR",
+              language: "en",
+              inputCaptcha: captchaSolution,
+              _: ts,
+            },
+            headers: {
+              Referer: `${IR_BASE}/enquiry/PNRStatus.html`,
+              Accept: "application/json, text/plain, */*",
+            },
+          });
+        } catch (err: any) {
+          resetIRSession();
+          throw new Error(
+            `UPSTREAM_ERROR: ${err.message || "IR request failed"}`
+          );
+        }
 
-      if (jsonParsed) {
-        result = normalizeFromJSON(jsonParsed, pnr);
-      } else if (domParsed && domParsed.passengers && domParsed.passengers.length > 0) {
-        result = {
-          pnr,
-          train: {
-            number: domParsed.trainNo || "",
-            name: domParsed.trainName || "",
-          },
-          journey: {
-            date: domParsed.journeyDate || "",
-            class: domParsed.class || "",
-            quota: domParsed.quota || "GN",
-            source: { code: domParsed.from?.code || "", name: domParsed.from?.name || "" },
-            destination: { code: domParsed.to?.code || "", name: domParsed.to?.name || "" },
-            boardingPoint: {
-              code: domParsed.boardingPoint?.code || domParsed.from?.code || "",
-              name: domParsed.boardingPoint?.name || domParsed.from?.name || "",
-            },
-            distance: domParsed.distance || 0,
-          },
-          chart: {
-            status: domParsed.chartStatus || "Chart Not Prepared",
-            prepared: (domParsed.chartStatus || "").toLowerCase().includes("prepared"),
-          },
-          booking: {
-            fare: domParsed.fare || 0,
-            ticketFare: 0,
-            bookingDate: "",
-          },
-          passengers: (domParsed.passengers || []).map((p, i) => ({
-            serialNumber: p.serialNumber || `Passenger ${i + 1}`,
-            coachPosition: 0,
-            booking: {
-              status: p.bookingStatus || "",
-              coach: p.bookingCoach || null,
-              berthNo: p.bookingBerth ? parseInt(p.bookingBerth) : null,
-              berthCode: null,
-              details: p.bookingDetails || "",
-            },
-            current: {
-              status: p.currentStatus || "",
-              coach: p.currentCoach || null,
-              berthNo: p.currentBerth ? parseInt(p.currentBerth) : null,
-              berthCode: null,
-              details: p.currentDetails || "",
-            },
-          })),
-        };
+        const data = resp.data;
+
+        // 3. Handle error responses from IR API
+        if (data?.errorMessage) {
+          // Reset session on session/captcha errors
+          if (
+            data.errorMessage.includes("Session") ||
+            data.errorMessage.includes("CAPTCHA") ||
+            data.errorMessage.includes("Invalid")
+          ) {
+            resetIRSession();
+
+            // Try once more with a fresh session + captcha
+            try {
+              const retryCaptcha = await solveCaptcha();
+              const retryResp = await client.get(IR_PNR_URL, {
+                params: {
+                  inputPnrNo: pnr,
+                  inputPage: "PNR",
+                  language: "en",
+                  inputCaptcha: retryCaptcha,
+                  _: Date.now(),
+                },
+                headers: {
+                  Referer: `${IR_BASE}/enquiry/PNRStatus.html`,
+                  Accept: "application/json, text/plain, */*",
+                },
+              });
+              const retryData = retryResp.data;
+              if (retryData?.errorMessage) {
+                throw new Error(
+                  `UPSTREAM_ERROR: ${retryData.errorMessage}`
+                );
+              }
+              const parsed = parseIRResponse(retryData, pnr);
+              if (!parsed || !parsed.train.number) {
+                throw new Error("PARSE_FAILURE");
+              }
+              return parsed;
+            } catch (retryErr: any) {
+              throw new Error(
+                `UPSTREAM_ERROR: ${retryErr.message || "Retry also failed"}`
+              );
+            }
+          }
+          throw new Error(`UPSTREAM_ERROR: ${data.errorMessage}`);
+        }
+
+        // 4. Parse the response
+        const parsed = parseIRResponse(data, pnr);
+        if (!parsed || !parsed.train.number) {
+          throw new Error("PARSE_FAILURE");
+        }
+
+        return parsed;
       }
-
-      if (!result || (!result.train.number && result.passengers.length === 0)) {
-        throw new Error("PARSE_FAILURE");
-      }
-
-      return result;
-    }
-  )
-  .then(
-    ({ data, cached: isCached }) =>
+    )
+    .then(({ data, cached: isCached }) =>
       isCached ? cachedRes(data) : ok(data)
-  )
-  .catch((err: any) => {
-    const msg = err.message || "Unknown error";
-    if (msg.includes("timeout") || msg.includes("TIMEOUT")) {
-      return fail(ERROR_CODES.TIMEOUT, msg, true);
-    }
-    if (msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
-      return fail(ERROR_CODES.UPSTREAM_UNREACHABLE, msg, true);
-    }
-    if (msg.includes("429") || msg.includes("Too Many Requests")) {
-      return fail(ERROR_CODES.UPSTREAM_RATE_LIMIT, msg, true);
-    }
-    if (msg.includes("5") && msg.includes("HTTP")) {
+    )
+    .catch((err: any) => {
+      const msg = err.message || "Unknown error";
+
+      if (msg.includes("CAPTCHA_SOLVE_FAILED")) {
+        return fail(
+          ERROR_CODES.UPSTREAM_ERROR,
+          `Failed to solve IR captcha: ${msg.replace("CAPTCHA_SOLVE_FAILED: ", "")}`,
+          true
+        );
+      }
+      if (msg.includes("CAPTCHA_OCR_EMPTY")) {
+        return fail(
+          ERROR_CODES.UPSTREAM_ERROR,
+          "IR captcha image returned empty — retrying with fresh session",
+          true
+        );
+      }
+      if (msg.includes("CAPTCHA_OCR_FAILED")) {
+        return fail(
+          ERROR_CODES.UPSTREAM_ERROR,
+          `IR captcha OCR could not parse the math expression`,
+          true
+        );
+      }
+      if (msg.includes("UPSTREAM_ERROR")) {
+        return fail(
+          ERROR_CODES.UPSTREAM_ERROR,
+          msg.replace("UPSTREAM_ERROR: ", ""),
+          true
+        );
+      }
+      if (msg.includes("timeout") || msg.includes("TIMEOUT")) {
+        return fail(ERROR_CODES.TIMEOUT, msg, true);
+      }
+      if (msg.includes("ECONNREFUSED") || msg.includes("ENOTFOUND")) {
+        return fail(ERROR_CODES.UPSTREAM_UNREACHABLE, msg, true);
+      }
+      if (msg.includes("429") || msg.includes("Too Many Requests")) {
+        return fail(ERROR_CODES.UPSTREAM_RATE_LIMIT, msg, true);
+      }
+      if (msg === "PARSE_FAILURE") {
+        return fail(
+          ERROR_CODES.PARSE_FAILURE,
+          "Failed to parse PNR data from Indian Railways — response format may have changed",
+          true
+        );
+      }
       return fail(ERROR_CODES.UPSTREAM_ERROR, msg, true);
-    }
-    if (msg === "PARSE_FAILURE") {
-      return fail(ERROR_CODES.PARSE_FAILURE, "Failed to parse PNR data from confirmtkt — page structure may have changed", true);
-    }
-    return fail(ERROR_CODES.UPSTREAM_ERROR, msg, true);
-  });
+    });
 }
