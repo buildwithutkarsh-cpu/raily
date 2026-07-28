@@ -11,6 +11,7 @@
 import type { RailwayProvider } from "./provider";
 import { MockRailwayProvider } from "./mock-provider";
 import { IndianRailAPIProvider } from "./indianrailapi-provider";
+import { IRCTCRapidAPIProvider } from "./irctc-api-provider";
 import { RailwayCache } from "./cache";
 import type {
   StationSearchResult,
@@ -89,13 +90,24 @@ export class RailwayClient {
     if (this.config.useMock || !this.config.apiKey) {
       this.provider = new MockRailwayProvider();
     } else {
-      const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST;
+      const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
       const baseUrl = process.env.RAILWAY_API_BASE_URL;
-      this.provider = new IndianRailAPIProvider({
-        apiKey: this.config.apiKey,
-        rapidApiHost: rapidApiHost || undefined,
-        baseUrl: baseUrl || undefined,
-      });
+
+      if (rapidApiHost) {
+        // Use the dedicated IRCTC RapidAPI provider
+        this.provider = new IRCTCRapidAPIProvider({
+          apiKey: this.config.apiKey,
+          rapidApiHost,
+          baseUrl: baseUrl || undefined,
+        });
+      } else {
+        // Use the indianrailapi.com provider (direct API key)
+        this.provider = new IndianRailAPIProvider({
+          apiKey: this.config.apiKey,
+          rapidApiHost: undefined,
+          baseUrl: baseUrl || undefined,
+        });
+      }
     }
   }
 
