@@ -15,11 +15,13 @@ import type {
   TrainSearchEntry,
   RunningDay,
   SeatAvailability,
+  SeatAvailabilityClass,
   PNRStatus,
   PNRPassenger,
   LiveStatus,
   LiveStatusStation,
   FareEnquiry,
+  FareClass,
   CoachComposition,
   TrainSchedule,
   ScheduleStation,
@@ -228,25 +230,113 @@ export class RapiProvider implements RailwayProvider {
   }
 
   /* ─── Seat Availability ──────────────────────────────────── */
-  /* Rapi does NOT support seat availability — fall back to mock */
+  /* GET /api/v1/trains/:trainNumber/availability?from=&to=&date= */
 
   async getSeatAvailability(params: SeatAvailabilityParams): Promise<SeatAvailability> {
-    throw new RailwayAPIError(
-      "Seat availability not supported by Rapi provider. Use RailKit or mock.",
-      "NOT_SUPPORTED",
-      501
-    );
+    const date = this.toRapiDate(params.date);
+    const res = await this.get<{
+      trainNo: string;
+      trainName: string;
+      from: { code: string; name: string };
+      to: { code: string; name: string };
+      date: string;
+      quota: string;
+      classes: Array<{
+        classCode: string;
+        className: string;
+        status: string;
+        available: number;
+        fare: number;
+        isTatkal: boolean;
+      }>;
+      totalClasses: number;
+    }>(`/api/v1/trains/${params.trainNumber}/availability?from=${params.from}&to=${params.to}&date=${date}${params.quota ? `&quota=${params.quota}` : ""}`);
+
+    if (!res.success || !res.data) {
+      throw new RailwayAPIError(
+        res.error || `Seat availability for ${params.trainNumber} not available`,
+        "RAPI_EMPTY",
+        404
+      );
+    }
+
+    const d = res.data;
+    const classes: SeatAvailabilityClass[] = (d.classes || []).map((c) => ({
+      code: c.classCode,
+      name: c.className,
+      fare: c.fare,
+      available: c.available,
+      total: c.available,
+      status: this.inferAvailabilityStatus(c.status),
+      racCount: 0,
+      wlCount: 0,
+    }));
+
+    return {
+      train: { number: d.trainNo, name: d.trainName },
+      date: d.date,
+      from: d.from,
+      to: d.to,
+      classes,
+      lastUpdated: new Date().toISOString(),
+    };
   }
 
   /* ─── Fare ───────────────────────────────────────────────── */
-  /* Rapi does NOT support fare lookup — fall back to mock       */
+  /* GET /api/v1/trains/:trainNumber/fare?from=&to=&date=        */
 
   async getFare(params: FareParams): Promise<FareEnquiry> {
-    throw new RailwayAPIError(
-      "Fare lookup not supported by Rapi provider. Use RailKit or mock.",
-      "NOT_SUPPORTED",
-      501
-    );
+    const date = this.toRapiDate(params.date || this.todayRapiDate());
+    const res = await this.get<{
+      trainNo: string;
+      trainName: string;
+      from: { code: string; name: string };
+      to: { code: string; name: string };
+      date: string;
+      quota: string;
+      classes: Array<{
+        classCode: string;
+        className: string;
+        status: string;
+        available: number;
+        fare: number;
+        isTatkal: boolean;
+      }>;
+      totalClasses: number;
+    }>(`/api/v1/trains/${params.trainNumber}/fare?from=${params.from}&to=${params.to}&date=${date}${params.quota ? `&quota=${params.quota}` : ""}`);
+
+    if (!res.success || !res.data) {
+      throw new RailwayAPIError(
+        res.error || `Fare for ${params.trainNumber} not available`,
+        "RAPI_EMPTY",
+        404
+      );
+    }
+
+    const d = res.data;
+    const classes: FareClass[] = (d.classes || []).map((c) => ({
+      code: c.classCode,
+      name: c.className,
+      baseFare: c.fare,
+      reservationCharge: 0,
+      superfastCharge: 0,
+      convenienceFee: 0,
+      totalFare: c.fare,
+      available: c.status === "AVAILABLE",
+    }));
+
+    const totalFare = classes.reduce((sum, c) => Math.min(sum, c.totalFare), Infinity);
+
+    return {
+      train: { number: d.trainNo, name: d.trainName },
+      from: d.from,
+      to: d.to,
+      date: d.date,
+      classes,
+      baseFare: totalFare === Infinity ? 0 : totalFare,
+      totalFare: totalFare === Infinity ? 0 : totalFare,
+      lastUpdated: new Date().toISOString(),
+    };
   }
 
   /* ─── PNR Status ─────────────────────────────────────────── */
@@ -460,5 +550,47 @@ export class RapiProvider implements RailwayProvider {
     if (lower.includes("delay") || lower.includes("late")) return "DELAYED";
     if (lower.includes("cancelled")) return "CANCELLED";
     return "ONTIME";
+  }
+
+  /**
+   * Normalize a date from any common format to DD-MM-YYYY (what Rapi expects).
+   * Supports: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, MM/DD/YYYY
+   */
+  /** Today's date in DD-MM-YYYY format */
+  private todayRapiDate(): string {
+    const today = new Date();
+    return `${String(today.getDate()).padStart(2, "0")}-${String(today.getMonth() + 1).padStart(2, "0")}-${today.getFullYear()}`;
+  }
+
+  /**
+   * Normalize a date to DD-MM-YYYY (what Rapi expects).
+   * Supports: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY
+   * Indian Railways always uses DD-MM-YYYY format.
+   */
+  private toRapiDate(date: string): string {
+    if (!date) return this.todayRapiDate();
+    // Already DD-MM-YYYY
+    if (/^\d{2}-\d{2}-\d{4}$/.test(date)) return date;
+    // YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const [y, m, d] = date.split("-");
+      return `${d}-${m}-${y}`;
+    }
+    // DD/MM/YYYY — Indian Railways convention
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(date)) {
+      const [d, m, y] = date.split("/");
+      return `${d}-${m}-${y}`;
+    }
+    // Fallback: treat as-is
+    return date;
+  }
+
+  private inferAvailabilityStatus(status: string): SeatAvailabilityClass["status"] {
+    const upper = status.toUpperCase();
+    if (upper === "AVAILABLE") return "AVAILABLE";
+    if (upper.startsWith("RAC")) return "RAC";
+    if (upper.startsWith("WL") || upper.startsWith("WAITLIST")) return "WAITLIST";
+    if (upper === "CLOSED" || upper === "NOT_AVAILABLE" || upper === "NA") return "CLOSED";
+    return "NOT_AVAILABLE";
   }
 }
