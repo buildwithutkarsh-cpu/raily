@@ -211,6 +211,8 @@ interface BookingContextValue {
   searchStations: (q: string) => Promise<ApiResponse<unknown>>;
   /** Get live status via Railway API */
   fetchLiveStatus: (trainNumber: string) => Promise<ApiResponse<unknown>>;
+  /** Get seat availability via Railway API */
+  fetchAvailability: (trainNumber: string, from: string, to: string, date?: string, cls?: string) => Promise<ApiResponse<unknown>>;
 }
 
 const BookingContext = createContext<BookingContextValue | null>(null);
@@ -345,6 +347,16 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     return result;
   }, []);
 
+  /* ── API: Seat Availability ─────────────────────────────── */
+  const fetchAvailability = useCallback(
+    async (trainNumber: string, from: string, to: string, date?: string, cls?: string) => {
+      const client = getRailwayClient();
+      const result = await client.getSeatAvailability(trainNumber, from, to, date || "", cls);
+      return result;
+    },
+    []
+  );
+
   return (
     <BookingContext.Provider
       value={{
@@ -363,6 +375,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
         fetchPNR,
         searchStations,
         fetchLiveStatus,
+        fetchAvailability,
       }}
     >
       {children}
