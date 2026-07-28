@@ -122,6 +122,82 @@ function resolveStationCode(name: string): string {
   return CITY_TO_CODE[clean] || clean.substring(0, 4).toUpperCase();
 }
 
+/* ─── PNR Generator ─────────────────────────────────────────── */
+
+/** Common first digits for IR-style PNR numbers */
+const PNR_FIRST_DIGITS = [4, 6, 8];
+
+/**
+ * Generate a deterministic 10-digit IR-style PNR based on train
+ * number, current date, coach, and seat. Each booking attempt
+ * gets a unique PNR while being reproducible from the same inputs.
+ *
+ * IR PNRs are 10 digits, typically starting with 4, 6, or 8.
+ */
+function generatePNR(trainNumber: string, coach: string, seatId: string | null): string {
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+
+  // Build a hash from train number + date + coach + seat
+  const raw = `${trainNumber}|${dateStr}|${coach}|${seatId || "-"}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32-bit integer
+  }
+
+  // Ensure positive and map to 9 digits (leaving room for first digit)
+  const absHash = Math.abs(hash);
+  const nineDigits = absHash % 1_000_000_000;
+  const firstDigit = PNR_FIRST_DIGITS[absHash % PNR_FIRST_DIGITS.length];
+
+  return `${firstDigit}${String(nineDigits).padStart(9, "0")}`;
+}
+
+/* ─── Recent Bookings (localStorage) ───────────────────────── */
+
+const RECENT_BOOKINGS_KEY = "raily_recent_bookings";
+
+interface RecentBooking {
+  pnr: string;
+  trainName: string;
+  trainNumber: string;
+  from: string;
+  to: string;
+  date: string;
+  time: string;
+  status: "CONFIRMED" | "RAC" | "WAITLIST" | "CANCELLED";
+  timestamp: string;
+}
+
+function getRecentBookings(): RecentBooking[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem(RECENT_BOOKINGS_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function addRecentBooking(booking: RecentBooking): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = getRecentBookings();
+    // Keep latest 5, avoid duplicates by PNR
+    const filtered = existing.filter((b) => b.pnr !== booking.pnr);
+    const updated = [booking, ...filtered].slice(0, 5);
+    localStorage.setItem(RECENT_BOOKINGS_KEY, JSON.stringify(updated));
+  } catch {
+    // localStorage might be full or disabled
+  }
+}
+
+export function getStoredRecentBookings(): RecentBooking[] {
+  return getRecentBookings();
+}
+
 /* ─── Default State ────────────────────────────────────────── */
 
 const defaultState: BookingState = {
@@ -258,14 +334,41 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const confirmBooking = useCallback(() => {
+  const confirmBooking = useCallback(async () => {
+    // Brief realistic processing delay
+    setState((prev) => ({ ...prev, isProcessing: true, step: "confirming" }));
+    await new Promise((r) => setTimeout(r, 400));
+
+    const train = state.selectedTrain;
+    const pnr = generatePNR(
+      train?.number || "00000",
+      state.selectedCoach || "B1",
+      state.selectedSeat
+    );
+
+    // Persist to recent bookings in localStorage
+    if (train && state.query) {
+      addRecentBooking({
+        pnr,
+        trainName: train.name,
+        trainNumber: train.number,
+        from: state.query.origin.toUpperCase() || "—",
+        to: state.query.destination.toUpperCase() || "—",
+        date: state.query.date || new Date().toLocaleDateString(),
+        time: `${train.departure} → ${train.arrival}`,
+        status: "CONFIRMED",
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     setState((prev) => ({
       ...prev,
+      isProcessing: false,
       bookingConfirmed: true,
       step: "confirmed",
-      pnrNumber: "4785213694",
+      pnrNumber: pnr,
     }));
-  }, []);
+  }, [state.selectedTrain, state.selectedCoach, state.selectedSeat, state.query]);
 
   const resetBooking = useCallback(() => {
     setState(defaultState);
