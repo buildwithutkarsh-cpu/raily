@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useUser } from "@clerk/nextjs";
 import AppSidebar, { type AppSection } from "./AppSidebar";
 import TopBar from "./TopBar";
 import AIAssistantPanel from "./AIAssistantPanel";
@@ -13,7 +14,7 @@ import BookingHistory from "./BookingHistory";
 import NotificationsPanel from "./NotificationsPanel";
 import TravelPlanner from "./TravelPlanner";
 import BookingConfirmation from "./BookingConfirmation";
-import { BookingProvider, useBooking } from "@/lib/booking-store";
+import { BookingProvider, useBooking, getStoredRecentBookings } from "@/lib/booking-store";
 import {
   TrainFront,
   ArrowRight,
@@ -23,7 +24,100 @@ import {
   Clock,
 } from "lucide-react";
 
+/* ─── Helpers ─────────────────────────────────────────────── */
+
+function timeAgo(iso: string): string {
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  const diffSec = Math.floor((now - then) / 1000);
+  if (diffSec < 60) return "Just now";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} min ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} hour${diffSec >= 7200 ? "s" : ""} ago`;
+  return `${Math.floor(diffSec / 86400)} day${diffSec >= 172800 ? "s" : ""} ago`;
+}
+
+function getUserDisplayName(user: ReturnType<typeof useUser>["user"]): string {
+  if (!user) return "Traveler";
+  if (user.firstName && user.lastName) return `${user.firstName} ${user.lastName[0]}.`;
+  if (user.firstName) return user.firstName;
+  if (user.username) return user.username;
+  return "Traveler";
+}
+
+function parseDateStr(dateStr: string): Date | null {
+  // Try DD-MM-YYYY
+  const dmy = dateStr.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
+  // Try YYYY-MM-DD
+  const ymd = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymd) return new Date(parseInt(ymd[1]), parseInt(ymd[2]) - 1, parseInt(ymd[3]));
+  // Try "tomorrow"
+  if (dateStr.toLowerCase().includes("tomorrow")) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d;
+  }
+  // Try "today"
+  if (dateStr.toLowerCase().includes("today")) return new Date();
+  // Try "DD Mon YYYY" (e.g. "28 Jul 2026")
+  const dmyText = dateStr.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})$/i);
+  if (dmyText) {
+    const months: Record<string, number> = {
+      jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+      jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+    };
+    return new Date(parseInt(dmyText[3]), months[dmyText[2].toLowerCase()], parseInt(dmyText[1]));
+  }
+  return null;
+}
+
+/* ─── Welcome Content ─────────────────────────────────────── */
+
 function WelcomeContent() {
+  const { user, isLoaded } = useUser();
+  const displayName = getUserDisplayName(user);
+
+  // Compute stats from localStorage bookings (re-reads on each render)
+  const bookings = getStoredRecentBookings();
+  const totalTrips = bookings.length;
+
+  // Count upcoming trips (date is in the future)
+  const now = new Date();
+  const upcomingTrips = bookings.filter((b) => {
+    const d = parseDateStr(b.date);
+    return d && d >= now;
+  }).length;
+
+  // Estimate total fare (avg ~₹1200 per booking)
+  const estimatedFare = totalTrips * 1200;
+
+  const stats = {
+    trips: totalTrips,
+    upcoming: upcomingTrips,
+    fare: estimatedFare > 0 ? `₹${estimatedFare.toLocaleString()}` : "—",
+  };
+
+  // Recent activity from localStorage bookings
+  const recentActivity: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    status: string;
+    time: string;
+  }> = [];
+
+  for (const b of bookings) {
+    recentActivity.push({
+      id: b.pnr,
+      title: `${b.from} → ${b.to}`,
+      detail: `${b.date} · ${b.trainName} ${b.trainNumber}`,
+      status: b.status === "CONFIRMED" ? "Confirmed" : b.status,
+      time: timeAgo(b.timestamp),
+    });
+  }
+
+  const hasRecentBookings = recentActivity.length > 0;
+
   return (
     <div className="space-y-8">
       {/* Welcome */}
@@ -39,7 +133,7 @@ function WelcomeContent() {
         <h1 className="text-3xl md:text-4xl font-bold uppercase tracking-[0.02em] leading-tight">
           Welcome back,
           <br />
-          <span className="text-[var(--railway-red)]">A. Kumar</span>
+          <span className="text-[var(--railway-red)]">{displayName}</span>
         </h1>
         <p className="text-[15px] text-[var(--muted)] mt-3 max-w-xl">
           Ask me anything about your journey. I can book trains, check PNR
@@ -98,70 +192,61 @@ function WelcomeContent() {
           <h2 className="text-sm font-bold uppercase tracking-[0.1em]">
             Recent Activity
           </h2>
-          <button className="text-[11px] uppercase tracking-[0.1em] text-[var(--muted)] hover:text-[var(--fg)]">
-            View all →
-          </button>
         </div>
-        <div className="space-y-2">
-          {[
-            {
-              title: "Delhi → Jaipur",
-              detail:
-                "Tomorrow, 28 Jul · Rajdhani Express 12951",
-              status: "Confirmed",
-              time: "2 min ago",
-            },
-            {
-              title: "PNR 8651274390",
-              detail: "Shatabdi Express · Delhi → Chandigarh",
-              status: "RAC",
-              time: "1 hour ago",
-            },
-            {
-              title: "Price Alert",
-              detail: "Garib Rath Delhi → Jaipur dropped to ₹740",
-              status: "Active",
-              time: "3 hours ago",
-            },
-          ].map((item, i) => (
-            <div
-              key={i}
-              className="flex items-center justify-between p-4 border border-[var(--fg)]/30 hover:border-[var(--fg)] transition-colors"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-8 h-8 flex items-center justify-center bg-[var(--fg)]/10">
-                  <ArrowRight className="h-4 w-4" />
+        {!hasRecentBookings && isLoaded ? (
+          <div className="border-2 border-dashed border-[var(--fg)]/30 p-6 text-center">
+            <p className="text-[13px] text-[var(--muted)]">
+              No bookings yet — search for a train to get started
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {recentActivity.slice(0, 4).map((item) => (
+              <div
+                key={item.id}
+                className="flex items-center justify-between p-4 border border-[var(--fg)]/30 hover:border-[var(--fg)] transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-8 h-8 flex items-center justify-center bg-[var(--fg)]/10">
+                    <ArrowRight className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">{item.title}</div>
+                    <div className="text-[11px] text-[var(--muted)]">
+                      {item.detail}
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-sm font-semibold">{item.title}</div>
-                  <div className="text-[11px] text-[var(--muted)]">
-                    {item.detail}
+                <div className="text-right">
+                  <span className="text-[11px] px-2 py-0.5 border border-[var(--fg)] uppercase tracking-[0.1em]">
+                    {item.status}
+                  </span>
+                  <div className="text-[10px] text-[var(--muted)] mt-1">
+                    {item.time}
                   </div>
                 </div>
               </div>
-              <div className="text-right">
-                <span className="text-[11px] px-2 py-0.5 border border-[var(--fg)] uppercase tracking-[0.1em]">
-                  {item.status}
-                </span>
-                <div className="text-[10px] text-[var(--muted)] mt-1">
-                  {item.time}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Quick stats */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { value: "12", label: "Trips This Year" },
-          { value: "₹8,450", label: "Total Saved" },
-          { value: "94%", label: "On-Time Rate" },
-          { value: "2", label: "Upcoming Trips" },
+          { value: stats.trips > 0 ? String(stats.trips) : "—", label: "Trips This Year" },
+          { value: stats.fare, label: "Total Fare" },
+          { value: "—", label: "Avg Rating" },
+          { value: stats.upcoming > 0 ? String(stats.upcoming) : "—", label: "Upcoming Trips" },
         ].map((stat) => (
           <div key={stat.label} className="border-2 border-[var(--fg)] p-4">
-            <div className="text-2xl font-bold">{stat.value}</div>
+            <div className="text-2xl font-bold">
+              {stat.value === "—" ? (
+                <span className="text-[var(--muted)] opacity-50">{stat.value}</span>
+              ) : (
+                stat.value
+              )}
+            </div>
             <div className="text-[10px] text-[var(--muted)] uppercase tracking-[0.1em] mt-1">
               {stat.label}
             </div>
