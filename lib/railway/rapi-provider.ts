@@ -41,7 +41,7 @@ export class RapiProvider implements RailwayProvider {
   private timeout: number;
 
   constructor(baseUrl?: string, timeoutMs = 15_000) {
-    this.baseUrl = baseUrl || process.env.RAPI_BASE_URL || "http://localhost:3001";
+    this.baseUrl = baseUrl || process.env.NEXT_PUBLIC_RAPI_BASE_URL || process.env.RAPI_BASE_URL || "http://localhost:3001";
     this.timeout = timeoutMs;
   }
 

@@ -187,9 +187,6 @@ export default function AIAssistantPanel({
       setMessages((prev) => [...prev, userMsg]);
       setIsTyping(true);
 
-      // Simulate processing delay
-      await new Promise((r) => setTimeout(r, 800 + Math.random() * 600));
-
       const lower = msgText.toLowerCase();
       const isPNRQuery =
         !!msgText.match(/\b\d{10}\b/) ||
@@ -234,8 +231,7 @@ export default function AIAssistantPanel({
         const { query, response } = parseQuery(msgText);
         setQuery(query);
         setStep("searching");
-        fetchTrains(query);
-
+        // Show a brief thinking state, then await the real API call
         const aiMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: "assistant",
@@ -252,12 +248,9 @@ export default function AIAssistantPanel({
           ],
         };
         setMessages((prev) => [...prev, aiMsg]);
-
-        setTimeout(() => {
-          setStep("recommendations");
-        }, 500);
-
         setIsTyping(false);
+        // Actually fetch trains — fetchTrains handles step transition internally
+        fetchTrains(query);
         return;
       }
 

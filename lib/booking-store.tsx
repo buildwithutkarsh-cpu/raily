@@ -419,6 +419,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
         ...prev,
         isProcessing: false,
         trains: [],
+        step: "idle",
         lastApiCall: {
           endpoint: "searchTrains",
           success: false,

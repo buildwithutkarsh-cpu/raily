@@ -94,7 +94,8 @@ export class RailwayClient {
     this.fallbackProvider = new MockRailwayProvider();
 
     // Select primary provider based on configuration
-    const rapiBaseUrl = process.env.RAPI_BASE_URL || "";
+    // NEXT_PUBLIC_ variant is available on the client side
+    const rapiBaseUrl = process.env.NEXT_PUBLIC_RAPI_BASE_URL || process.env.RAPI_BASE_URL || "";
     const railKitKey = process.env.RAILKIT_API_KEY || "";
     const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
     const baseUrl = process.env.RAILWAY_API_BASE_URL;
@@ -357,7 +358,7 @@ let globalClient: RailwayClient | null = null;
  */
 export function getRailwayClient(): RailwayClient {
   if (!globalClient) {
-    const hasRapi = !!process.env.RAPI_BASE_URL;
+    const hasRapi = !!process.env.RAPI_BASE_URL || !!process.env.NEXT_PUBLIC_RAPI_BASE_URL;
     const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY && !hasRapi;
     globalClient = new RailwayClient({
       useMock,
