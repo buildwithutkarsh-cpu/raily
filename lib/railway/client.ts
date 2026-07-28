@@ -15,6 +15,7 @@ import { MockRailwayProvider } from "./mock-provider";
 import { IndianRailAPIProvider } from "./indianrailapi-provider";
 import { IRCTCRapidAPIProvider } from "./irctc-api-provider";
 import { RailKitProvider } from "./railkit-provider";
+import { RapiProvider } from "./rapi-provider";
 import { RailwayCache } from "./cache";
 import type {
   StationSearchResult,
@@ -96,12 +97,15 @@ export class RailwayClient {
     if (this.config.useMock || !this.config.apiKey) {
       this.primaryProvider = this.fallbackProvider;
     } else {
+      const rapiBaseUrl = process.env.RAPI_BASE_URL || "";
       const railKitKey = process.env.RAILKIT_API_KEY || "";
       const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
       const baseUrl = process.env.RAILWAY_API_BASE_URL;
 
-      if (railKitKey) {
-        // RailKit is the primary paid provider
+      if (rapiBaseUrl) {
+        // Rapi is the self-hosted free provider
+        this.primaryProvider = new RapiProvider(rapiBaseUrl);
+      } else if (railKitKey) {
         this.primaryProvider = new RailKitProvider(railKitKey);
       } else if (rapidApiHost) {
         this.primaryProvider = new IRCTCRapidAPIProvider({
@@ -347,14 +351,15 @@ let globalClient: RailwayClient | null = null;
  * Get the global Railway client instance.
  * Configure via environment variables:
  *   - NEXT_PUBLIC_RAILWAY_USE_MOCK: "true" to use mock data
- *   - RAILKIT_API_KEY: API key for RailKit (paid — becomes primary provider)
- *   - RAILWAY_API_KEY: API key for the fallback providers (RapidAPI or direct)
- *   - RAILWAY_RAPIDAPI_HOST: RapidAPI host header (if using RapidAPI)
+ *   - RAPI_BASE_URL: URL of self-hosted Rapi server (e.g. http://localhost:3001)
+ *   - RAILKIT_API_KEY: API key for RailKit (paid)
+ *   - RAILWAY_API_KEY: API key for fallback providers (RapidAPI or direct)
+ *   - RAILWAY_RAPIDAPI_HOST: RapidAPI host header
  *   - RAILWAY_API_BASE_URL: Custom base URL (defaults to indianrailapi.com)
  */
 export function getRailwayClient(): RailwayClient {
   if (!globalClient) {
-    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY;
+    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY && !process.env.RAPI_BASE_URL;
     globalClient = new RailwayClient({
       useMock,
       apiKey: process.env.RAILWAY_API_KEY || process.env.RAILKIT_API_KEY,

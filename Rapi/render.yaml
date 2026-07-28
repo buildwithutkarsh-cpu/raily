@@ -1,0 +1,56 @@
+# ═══════════════════════════════════════════════════════════════
+# RAPI — Render Blueprint (Infrastructure as Code)
+# ═══════════════════════════════════════════════════════════════
+# Deploy by connecting your GitHub repo to Render:
+#   1. Go to https://dashboard.render.com/blueprints
+#   2. Connect your repository
+#   3. Render will auto-detect this render.yaml file
+#   4. Set the required environment variables (see Rapi/.env.example)
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  - type: web
+    name: rapi
+    env: node
+    rootDir: Rapi
+    repo: https://github.com/AniCrad/raily
+    branch: main
+    region: singapore  # Closest to Indian railway servers for low latency
+    plan: free         # Free tier — spins down after 15 min of inactivity
+
+    # Build: install deps + compile TypeScript → dist/
+    buildCommand: npm install && npm run build
+
+    # Start: run compiled output
+    startCommand: npm start
+
+    # Health check — Render pings this every 60s on paid plans
+    healthCheckPath: /api/v1/admin/health
+
+    # Auto-deploy on every push to main branch
+    autoDeploy: true
+
+    # Environment variables
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000        # Render's default internal port
+      - key: CACHE_TTL_PNR
+        value: "180"        # 3 min TTL for PNR status
+      - key: CACHE_TTL_LIVE
+        value: "120"        # 2 min TTL for live status
+      - key: CACHE_TTL_SEARCH
+        value: "600"        # 10 min TTL for train search
+      - key: CACHE_TTL_ROUTES
+        value: "86400"      # 24 hr TTL for routes
+      - key: CACHE_TTL_AVAIL
+        value: "120"        # 2 min TTL for availability
+      - key: CACHE_MAX_KEYS
+        value: "5000"       # Max cache entries
+      - key: CACHE_STALE_TTL
+        value: "600"        # 10 min stale grace
+      - key: CACHE_MIN_INTERVAL
+        value: "30"         # 30s min between scrapes
+      - key: ADMIN_KEY
+        sync: false         # Must be set manually in Render dashboard
