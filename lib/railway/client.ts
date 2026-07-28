@@ -14,6 +14,7 @@ import type { RailwayProvider } from "./provider";
 import { MockRailwayProvider } from "./mock-provider";
 import { IndianRailAPIProvider } from "./indianrailapi-provider";
 import { IRCTCRapidAPIProvider } from "./irctc-api-provider";
+import { RailKitProvider } from "./railkit-provider";
 import { RailwayCache } from "./cache";
 import type {
   StationSearchResult,
@@ -95,10 +96,14 @@ export class RailwayClient {
     if (this.config.useMock || !this.config.apiKey) {
       this.primaryProvider = this.fallbackProvider;
     } else {
+      const railKitKey = process.env.RAILKIT_API_KEY || "";
       const rapidApiHost = process.env.RAILWAY_RAPIDAPI_HOST || "";
       const baseUrl = process.env.RAILWAY_API_BASE_URL;
 
-      if (rapidApiHost) {
+      if (railKitKey) {
+        // RailKit is the primary paid provider
+        this.primaryProvider = new RailKitProvider(railKitKey);
+      } else if (rapidApiHost) {
         this.primaryProvider = new IRCTCRapidAPIProvider({
           apiKey: this.config.apiKey,
           rapidApiHost,
@@ -342,16 +347,17 @@ let globalClient: RailwayClient | null = null;
  * Get the global Railway client instance.
  * Configure via environment variables:
  *   - NEXT_PUBLIC_RAILWAY_USE_MOCK: "true" to use mock data
- *   - RAILWAY_API_KEY: API key for the real provider (RapidAPI or direct)
+ *   - RAILKIT_API_KEY: API key for RailKit (paid — becomes primary provider)
+ *   - RAILWAY_API_KEY: API key for the fallback providers (RapidAPI or direct)
  *   - RAILWAY_RAPIDAPI_HOST: RapidAPI host header (if using RapidAPI)
  *   - RAILWAY_API_BASE_URL: Custom base URL (defaults to indianrailapi.com)
  */
 export function getRailwayClient(): RailwayClient {
   if (!globalClient) {
-    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK !== "false";
+    const useMock = process.env.NEXT_PUBLIC_RAILWAY_USE_MOCK === "true" && !process.env.RAILKIT_API_KEY;
     globalClient = new RailwayClient({
       useMock,
-      apiKey: process.env.RAILWAY_API_KEY,
+      apiKey: process.env.RAILWAY_API_KEY || process.env.RAILKIT_API_KEY,
     });
   }
   return globalClient;
