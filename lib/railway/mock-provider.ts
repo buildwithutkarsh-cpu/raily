@@ -509,21 +509,59 @@ export class MockRailwayProvider implements RailwayProvider {
     await delay(200 + Math.random() * 400);
     const train = TRAINS.find((t) => t.number === trainNumber);
 
+    // Build a dynamic route based on the train's actual from/to
+    const fromCode = train?.from || "NDLS";
+    const toCode = train?.to || "BCT";
+    const fromName = findStation(fromCode)?.name || fromCode;
+    const toName = findStation(toCode)?.name || toCode;
+    const totalDist = train?.distance || 1000;
+    const depTime = train?.departure || "06:00";
+    const arrTime = train?.arrival || "20:00";
+
+    // Pick a realistic midway station based on the route
+    const midwayStation = getMidwayStation(fromCode, toCode);
+    const midwayDist = Math.round(totalDist * 0.55);
+    const midwayArr = interpolateTime(depTime, arrTime, 0.5);
+    const midwayDep = interpolateTime(depTime, arrTime, 0.52);
+
+    // Simulate some delay and position
+    const delayMinutes = Math.floor(Math.random() * 12);
+    const speed = 70 + Math.floor(Math.random() * 25);
+    const distanceCovered = midwayDist;
+    const position = totalDist > 0 ? Math.round((distanceCovered / totalDist) * 100) : 50;
+
     return {
       train: { number: trainNumber, name: train?.name || "Train" },
-      currentStation: { code: "KOTA", name: "Kota Junction" },
+      currentStation: { code: midwayStation.code, name: midwayStation.name },
       lastUpdated: new Date().toISOString(),
-      delay: 8,
-      speed: 82,
-      status: "ONTIME",
+      delay: delayMinutes,
+      speed,
+      status: delayMinutes > 10 ? "DELAYED" : "ONTIME",
       hasDeparted: true,
-      distanceCovered: 680,
-      totalDistance: train?.distance || 1000,
-      position: 68,
+      distanceCovered,
+      totalDistance: totalDist,
+      position,
       route: [
-        { station: { code: train?.from || "NDLS", name: findStation(train?.from || "NDLS")?.name || "Delhi" }, scheduledArrival: "-", scheduledDeparture: train?.departure || "06:00", distance: 0, day: 1, delay: 0, crossed: true },
-        { station: { code: "KOTA", name: "Kota Junction" }, scheduledArrival: "10:30", scheduledDeparture: "10:35", actualArrival: "10:38", actualDeparture: "10:40", distance: 680, day: 1, platform: "2", delay: 8, crossed: true },
-        { station: { code: train?.to || "BCT", name: findStation(train?.to || "BCT")?.name || "Mumbai" }, scheduledArrival: train?.arrival || "08:35", scheduledDeparture: "-", distance: train?.distance || 1386, day: 1, delay: 5, crossed: false },
+        {
+          station: { code: fromCode, name: fromName },
+          scheduledArrival: "-",
+          scheduledDeparture: depTime,
+          distance: 0, day: 1, delay: 0, crossed: true,
+        },
+        {
+          station: { code: midwayStation.code, name: midwayStation.name },
+          scheduledArrival: midwayArr,
+          scheduledDeparture: midwayDep,
+          distance: midwayDist, day: 1, platform: "2", delay: delayMinutes,
+          crossed: true,
+        },
+        {
+          station: { code: toCode, name: toName },
+          scheduledArrival: arrTime,
+          scheduledDeparture: "-",
+          distance: totalDist, day: 1, delay: Math.floor(delayMinutes * 0.7),
+          crossed: false,
+        },
       ],
     };
   }
@@ -575,6 +613,63 @@ function queryZone(code: string): string {
     HWH: "ER", CDG: "NR", PUNE: "CR", LKO: "NR",
   };
   return zones[code] || "NR";
+}
+
+/** Realistic midway stations for common IR routes */
+const MIDWAY_STATIONS: Record<string, { code: string; name: string }> = {
+  // Delhi → Mumbai
+  NDLS_BCT: { code: "KOTA", name: "Kota Junction" },
+  NDLS_MMCT: { code: "KOTA", name: "Kota Junction" },
+  NDLS_CSTM: { code: "KOTA", name: "Kota Junction" },
+  // Delhi → Howrah
+  NDLS_HWH: { code: "ALD", name: "Prayagraj Junction" },
+  // Delhi → Chennai
+  NDLS_MAS: { code: "NGP", name: "Nagpur Junction" },
+  // Delhi → Bangalore
+  NDLS_SBC: { code: "SC", name: "Secunderabad Junction" },
+  NDLS_JP: { code: "AII", name: "Ajmer Junction" },
+  NDLS_CDG: { code: "DEC", name: "Delhi Cantt" },
+  NDLS_SC: { code: "JHS", name: "Jhansi Junction" },
+  // Mumbai → Delhi (reverse)
+  BCT_NDLS: { code: "KOTA", name: "Kota Junction" },
+  MMCT_NDLS: { code: "KOTA", name: "Kota Junction" },
+  // Delhi → Amritsar
+  NDLS_ASR: { code: "DEC", name: "Delhi Cantt" },
+  NDLS_JAT: { code: "DEC", name: "Delhi Cantt" },
+  // Bangalore → Delhi (reverse)
+  SBC_NDLS: { code: "SC", name: "Secunderabad Junction" },
+  // Mumbai → Amritsar
+  MMCT_ASR: { code: "AII", name: "Ajmer Junction" },
+  // Other routes
+  JP_NDLS: { code: "AII", name: "Ajmer Junction" },
+  HWH_NDLS: { code: "ALD", name: "Prayagraj Junction" },
+};
+
+function getMidwayStation(from: string, to: string): { code: string; name: string } {
+  const key = `${from}_${to}`;
+  const reversed = `${to}_${from}`;
+  return MIDWAY_STATIONS[key] || MIDWAY_STATIONS[reversed] || { code: "KOTA", name: "Kota Junction" };
+}
+
+/** Roughly interpolate a time between departure and arrival, given fraction */
+function interpolateTime(dep: string, arr: string, fraction: number): string {
+  const toMins = (t: string) => {
+    const m = t.match(/(\d{1,2}):(\d{2})/);
+    return m ? parseInt(m[1]) * 60 + parseInt(m[2]) : 0;
+  };
+  const fromMins = (m: number) => {
+    const h = Math.floor(m / 60) % 24;
+    const min = m % 60;
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  };
+
+  let depMins = toMins(dep);
+  let arrMins = toMins(arr);
+  // Handle overnight trains (arrival < departure means next day)
+  if (arrMins < depMins) arrMins += 24 * 60;
+
+  const midway = Math.round(depMins + (arrMins - depMins) * fraction);
+  return fromMins(midway);
 }
 
 /** Create a singleton instance */
