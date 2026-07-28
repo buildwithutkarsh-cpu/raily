@@ -1,21 +1,92 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Check,
   Train,
   Clock,
   Ticket,
   Download,
-  Share2,
+
   ArrowRight,
   Printer,
   Sparkles,
+  Mail,
+  Loader2,
+  Send,
+  X,
 } from "lucide-react";
 import { useBooking } from "@/lib/booking-store";
 
 export default function BookingConfirmation() {
   const { state, resetBooking } = useBooking();
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [email, setEmail] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [sendStatus, setSendStatus] = useState<
+    "idle" | "sending" | "sent" | "error"
+  >("idle");
+  const [sendMessage, setSendMessage] = useState("");
+
+  const handleSendTicket = async () => {
+    if (!email.includes("@")) return;
+
+    setIsSending(true);
+    setSendStatus("sending");
+    setSendMessage("");
+
+    try {
+      const fromCode =
+        state.query?.origin === "—" ? "NDLS" :
+        state.query?.origin?.substring(0, 4).toUpperCase() || "NDLS";
+      const toCode =
+        state.query?.destination?.substring(0, 4).toUpperCase() || "JP";
+
+      const res = await fetch("/api/ticket/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          pnr: state.pnrNumber || "—",
+          trainName: state.selectedTrain?.name || "Rajdhani Express",
+          trainNumber: state.selectedTrain?.number || "12951",
+          from: state.query?.origin || "Delhi",
+          fromCode,
+          to: state.query?.destination || "Jaipur",
+          toCode,
+          date: state.query?.date || new Date().toLocaleDateString(),
+          departure: state.selectedTrain?.departure || "06:25",
+          arrival: state.selectedTrain?.arrival || "11:50",
+          duration: state.selectedTrain?.duration || "5h 25m",
+          coach: state.selectedCoach || "B1",
+          seat: state.selectedSeat?.match(/-(\d+)/)?.[1] || "7",
+          tier: state.seatRecommendation?.tier || "Lower",
+          fare: state.selectedTrain?.price || 1245,
+          class: state.selectedTrain?.classType || "3A",
+          passengerName: "Primary Passenger",
+          platform: "5",
+        }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setSendStatus("sent");
+        setSendMessage("Ticket sent to your email! Check your inbox.");
+      } else {
+        setSendStatus("error");
+        setSendMessage(data.error?.message || "Failed to send ticket");
+      }
+    } catch (err) {
+      setSendStatus("error");
+      setSendMessage(
+        err instanceof Error ? err.message : "Something went wrong"
+      );
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   const train = state.selectedTrain;
   const pnr = state.pnrNumber || "—";
@@ -189,13 +260,70 @@ Thank you for using RAILY.</pre>`
             <Printer className="h-3.5 w-3.5" />
             Print
           </button>
-          <button className="flex-1 flex items-center justify-center gap-2 py-3 text-xs uppercase tracking-[0.1em] font-semibold border-l-2 border-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors">
+          <button
+            onClick={() => {
+              setShowEmailModal(true);
+              setSendStatus("idle");
+              setSendMessage("");
+            }}
+            className="flex-1 flex items-center justify-center gap-2 py-3 text-xs uppercase tracking-[0.1em] font-semibold border-l-2 border-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors"
+          >
+            <Mail className="h-3.5 w-3.5" />
+            Email
+          </button>
+          <button
+            onClick={() => {
+              // Trigger PDF download via the API
+              fetch("/api/ticket/send", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: "download@raily.app",
+                  pnr: state.pnrNumber || "—",
+                  trainName: state.selectedTrain?.name || "Rajdhani Express",
+                  trainNumber: state.selectedTrain?.number || "12951",
+                  from: state.query?.origin || "Delhi",
+                  fromCode: state.query?.origin?.substring(0, 4).toUpperCase() || "NDLS",
+                  to: state.query?.destination || "Jaipur",
+                  toCode: state.query?.destination?.substring(0, 4).toUpperCase() || "JP",
+                  date: state.query?.date || new Date().toLocaleDateString(),
+                  departure: state.selectedTrain?.departure || "06:25",
+                  arrival: state.selectedTrain?.arrival || "11:50",
+                  duration: state.selectedTrain?.duration || "5h 25m",
+                  coach: state.selectedCoach || "B1",
+                  seat: state.selectedSeat?.match(/-(\d+)/)?.[1] || "7",
+                  tier: state.seatRecommendation?.tier || "Lower",
+                  fare: state.selectedTrain?.price || 1245,
+                  class: state.selectedTrain?.classType || "3A",
+                  passengerName: "Primary Passenger",
+                  platform: "5",
+                }),
+              })
+                .then((res) => {
+                  const contentType = res.headers.get("Content-Type");
+                  if (contentType === "application/pdf") {
+                    return res.blob();
+                  }
+                  return null;
+                })
+                .then((blob) => {
+                  if (blob) {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `ticket-${pnr}.pdf`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }
+                })
+                .catch(() => {
+                  // Silent fallback
+                });
+            }}
+            className="flex-1 flex items-center justify-center gap-2 py-3 text-xs uppercase tracking-[0.1em] font-semibold border-l-2 border-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors"
+          >
             <Download className="h-3.5 w-3.5" />
             Download
-          </button>
-          <button className="flex-1 flex items-center justify-center gap-2 py-3 text-xs uppercase tracking-[0.1em] font-semibold border-l-2 border-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors">
-            <Share2 className="h-3.5 w-3.5" />
-            Share
           </button>
         </div>
       </motion.div>
@@ -276,6 +404,114 @@ Thank you for using RAILY.</pre>`
           Book Another Journey
         </button>
       </motion.div>
+
+      {/* Email Ticket Modal */}
+      <AnimatePresence>
+        {showEmailModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50"
+            onClick={() => setShowEmailModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.2 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-[var(--bg)] border-2 border-[var(--fg)] p-6 w-full max-w-sm mx-4"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <Mail className="h-5 w-5" />
+                  <span className="font-bold text-sm uppercase tracking-[0.05em]">
+                    Email Ticket
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowEmailModal(false)}
+                  className="w-8 h-8 flex items-center justify-center hover:bg-[var(--fg)]/5 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {sendStatus === "sent" ? (
+                <div className="text-center py-6">
+                  <div className="w-12 h-12 bg-[var(--fg)] flex items-center justify-center mx-auto mb-4">
+                    <Check className="h-6 w-6 text-[var(--bg)]" />
+                  </div>
+                  <p className="text-sm font-bold mb-1">Ticket Sent! 🎫</p>
+                  <p className="text-[13px] text-[var(--muted)]">
+                    {sendMessage || "Check your inbox for the PDF"}
+                  </p>
+                  <button
+                    onClick={() => setShowEmailModal(false)}
+                    className="mt-4 px-6 py-2 bg-[var(--fg)] text-[var(--bg)] text-xs uppercase tracking-[0.1em] font-semibold hover:bg-[var(--railway-red)] transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="text-[13px] text-[var(--muted)] mb-4">
+                    Enter your email to receive the PDF ticket for{" "}
+                    <span className="font-semibold text-[var(--fg)]">
+                      {state.selectedTrain?.name || "your booking"}
+                    </span>
+                  </p>
+
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full bg-transparent border-2 border-[var(--fg)] px-4 py-3 text-sm outline-none mb-4 placeholder:text-[var(--muted)]"
+                  />
+
+                  {sendStatus === "error" && sendMessage && (
+                    <p className="text-[12px] text-[var(--railway-red)] mb-3">
+                      {sendMessage}
+                    </p>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowEmailModal(false)}
+                      className="flex-1 px-4 py-3 border-2 border-[var(--fg)] text-xs uppercase tracking-[0.1em] font-semibold hover:bg-[var(--fg)]/5 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSendTicket}
+                      disabled={!email.includes("@") || isSending}
+                      className="flex-1 px-4 py-3 bg-[var(--fg)] text-[var(--bg)] text-xs uppercase tracking-[0.1em] font-semibold disabled:opacity-30 hover:bg-[var(--railway-red)] transition-colors flex items-center justify-center gap-2"
+                    >
+                      {isSending ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4" />
+                          Send Ticket
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-[var(--muted)] mt-3 text-center">
+                    ✦ This is a simulated ticket not valid for real travel ✦
+                  </p>
+                </>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
