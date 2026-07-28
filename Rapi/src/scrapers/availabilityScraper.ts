@@ -1,29 +1,31 @@
 /* ══════════════════════════════════════════════════════════════
-   RAPI — Seat Availability Scraper
+   RAPI — Seat Availability & Fare Scraper
    
-   Sources: erail.in, indianrail.gov.in (public availability tables)
+   Source: erail.in (pipe-delimited train info from getTrains.aspx)
    
-   Extracts class-wise seat status:
-     - AVL 42  → 42 seats available
-     - RAC 5   → 5 RAC (Reservation Against Cancellation)
-     - WL 10   → Waitlist number 10
-     - GNWL 15 → General Waitlist number 15
-     - PQWL    → Pooled Quota Waitlist
-     - RLWL    → Remote Location Waitlist
-     - RELEASE → Cancelled/Released quota
+   Strategy:
+     The dedicated availability/fare endpoints on erail.in use
+     dynamic loading (SignalR/AJAX), making them unsuitable for
+     server-side scraping. Instead, we extract class-wise data
+     from the proven getTrains.aspx endpoint (same API used by
+     infoScraper and searchScraper).
+     
+   Data extracted:
+     - Class codes (1A, 2A, 3A, SL, CC, 2S, etc.)
+     - Base class names and fare info
+     - Static berth counts (from rake/coach composition)
    
-   DOM Resiliency:
-     - Multiple selector fallbacks for class/status/fare cells
-     - Handles various table layouts from different portals
-     - Flexible date parsing (DD-MM-YYYY, YYYY-MM-DD)
+   Note: Live per-date seat counts (AVL 42, RAC 5, WL 10) are
+   not available through this method. The response will show
+   classes as "AVAILABLE" or "NOT_AVAILABLE" based on whether
+   the class exists on the train.
    ══════════════════════════════════════════════════════════════ */
 
-import * as cheerio from "cheerio";
 import { scraperClient, ScrapeResult, ok, cachedRes, fail } from "./client";
 import { ERROR_CODES } from "../utils/errors";
 import { cache } from "../cache";
 import { SOURCES, CONFIG } from "../config";
-import { clean } from "../utils/parser";
+import { parseErailTrainInfo } from "../utils/parser";
 
 /* ─── Types ────────────────────────────────────────────────── */
 
@@ -43,8 +45,8 @@ export interface ClassAvailability {
   classCode: string;
   className: string;
   status: SeatStatus;
-  available: number;       // Number of seats available (0 for WL/RAC)
-  waitlistNumber?: number;  // Waitlist position (for WL/RAC/GNWL/etc)
+  available: number;
+  waitlistNumber?: number;
   fare: number;
   isTatkal: boolean;
   quota?: string;
@@ -63,58 +65,6 @@ export interface AvailabilityResponse {
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
-function parseSeatStatus(statusText: string): {
-  status: SeatStatus;
-  available: number;
-  waitlistNumber?: number;
-} {
-  const text = clean(statusText).toUpperCase();
-
-  const avlMatch = text.match(/^(AVL|AVAILABLE|AVAIL)\s*(\d+)/i);
-  if (avlMatch) {
-    return { status: "AVAILABLE", available: parseInt(avlMatch[2]) };
-  }
-
-  const racMatch = text.match(/^(RAC)\s*(\d+)/i);
-  if (racMatch) {
-    return { status: "RAC", available: 0, waitlistNumber: parseInt(racMatch[2]) };
-  }
-
-  const gnwlMatch = text.match(/^(GNWL)\s*(\d+)/i);
-  if (gnwlMatch) {
-    return { status: "GNWL", available: 0, waitlistNumber: parseInt(gnwlMatch[2]) };
-  }
-
-  const pqwlMatch = text.match(/^(PQWL)\s*(\d+)/i);
-  if (pqwlMatch) {
-    return { status: "PQWL", available: 0, waitlistNumber: parseInt(pqwlMatch[2]) };
-  }
-
-  const rlwlMatch = text.match(/^(RLWL)\s*(\d+)/i);
-  if (rlwlMatch) {
-    return { status: "RLWL", available: 0, waitlistNumber: parseInt(rlwlMatch[2]) };
-  }
-
-  const wlMatch = text.match(/^(WL)\s*(\d+)/i);
-  if (wlMatch) {
-    return { status: "WAITLIST", available: 0, waitlistNumber: parseInt(wlMatch[2]) };
-  }
-
-  if (text.includes("RELEASE") || text.includes("CANCEL")) {
-    return { status: "RELEASE", available: 0 };
-  }
-
-  if (text.includes("CHART") || text.includes("CNF")) {
-    return { status: "CHART_PREPARED", available: 1 };
-  }
-
-  if (text.includes("N/A") || text.includes("NA") || text === "--" || text === "") {
-    return { status: "NOT_APPLICABLE", available: 0 };
-  }
-
-  return { status: "NOT_AVAILABLE", available: 0 };
-}
-
 const CLASS_NAMES: Record<string, string> = {
   "1A": "First AC",
   "2A": "Second AC",
@@ -127,144 +77,51 @@ const CLASS_NAMES: Record<string, string> = {
   "FC": "First Class",
   "1A/2A": "First/Second AC Combined",
   "2A/3A": "Second/Third AC Combined",
-  "3A/SL": "Third AC/Sleeper Combined",
 };
 
-/* ─── DOM Parsing ──────────────────────────────────────────── */
-
-function parseAvailabilityTable($: cheerio.CheerioAPI): ClassAvailability[] {
-  const classes: ClassAvailability[] = [];
-
-  // Pattern 1: Standard availability table
-  $(
-    "table.availability-table tbody tr, " +
-    ".availability-results tbody tr, " +
-    ".seat-availability tbody tr, " +
-    "[data-testid='availability-table'] tbody tr, " +
-    ".avail-table tbody tr, " +
-    "table.train-availability tbody tr, " +
-    ".class-wise-availability tr"
-  ).each((_i: number, row: any) => {
-    const cells = $(row).find("td, .avail-cell");
-    if (cells.length < 3) return;
-
-    const classCode = clean($(cells[0]).text()).toUpperCase();
-    const statusText = clean($(cells[1]).text());
-    const fareText = clean($(cells[2]).text());
-
-    if (
-      classCode.toLowerCase().includes("class") ||
-      classCode.toLowerCase().includes("avail") ||
-      classCode.match(/^\d+$/)
-    ) {
-      return;
-    }
-
-    const parsed = parseSeatStatus(statusText);
-    const fareMatch = fareText.match(/[\d,]+/);
-    const fare = fareMatch ? parseInt(fareMatch[0].replace(/,/g, "")) : 0;
-
-    const isTatkal =
-      classCode.includes("TATKAL") ||
-      clean($(cells[3])?.text() || "").toLowerCase().includes("tatkal") ||
-      $(row).hasClass("tatkal");
-
-    const baseCode = classCode.replace(/\s*TATKAL\s*/i, "").trim();
-
-    classes.push({
-      classCode: baseCode || classCode,
-      className: CLASS_NAMES[baseCode] || baseCode,
-      status: parsed.status,
-      available: parsed.available,
-      waitlistNumber: parsed.waitlistNumber,
-      fare,
-      isTatkal,
-    });
-  });
-
-  // Pattern 2: Grid/card-based layout (mobile view)
-  if (classes.length === 0) {
-    $(
-      ".class-card, .availability-card, .seat-card, " +
-      "[data-testid='class-card'], .avail-card"
-    ).each((_i: number, card: any) => {
-      const classCode = clean(
-        $(card).find(".class-code, .class-name, .travel-class").text()
-      ).toUpperCase();
-
-      const statusText = clean(
-        $(card).find(".status, .seat-status, .avail-status").text()
-      );
-
-      const fareText = clean(
-        $(card).find(".fare, .price, .amount").text()
-      );
-
-      if (!classCode) return;
-
-      const parsed = parseSeatStatus(statusText);
-      const fareMatch = fareText.match(/[\d,]+/);
-      const fare = fareMatch ? parseInt(fareMatch[0].replace(/,/g, "")) : 0;
-
-      const baseCode = classCode.replace(/\s*TATKAL\s*/i, "").trim();
-
-      classes.push({
-        classCode: baseCode || classCode,
-        className: CLASS_NAMES[baseCode] || baseCode,
-        status: parsed.status,
-        available: parsed.available,
-        waitlistNumber: parsed.waitlistNumber,
-        fare,
-        isTatkal: classCode.includes("TATKAL") || $(card).hasClass("tatkal"),
-      });
+/**
+ * Parse class-wise availability data from erail.in's pipe-delimited response.
+ * 
+ * The class data is embedded in a specific section of the response, bounded by
+ * `~0~1~` on the left and `~~~~~~~` on the right.
+ * Format within that section: CLASS:total:available:rac:wl::::fare:::|
+ * Example: 1A:12::20:::::2:::|2A:105:69:42:24:2:::5::3:|3A:279:212:71:55:6:6::6::13:4|
+ */
+function parseClassData(raw: string): Array<{ classCode: string; total: number; available: number; rac: number; wl: number; fare: number }> {
+  const results: Array<{ classCode: string; total: number; available: number; rac: number; wl: number; fare: number }> = [];
+  
+  // Isolate the class data section — bounded by ~0~1~ and ~~~~~~~
+  const sectionMatch = raw.match(/~0~1~(.+?)~~~~~~~/);
+  const classSection = sectionMatch ? sectionMatch[1] : "";
+  if (!classSection) return results;
+  
+  // Split by | to get individual class entries
+  const entries = classSection.split("|").filter(Boolean);
+  for (const entry of entries) {
+    const fields = entry.split(":");
+    if (fields.length < 2) continue;
+    
+    const classCode = fields[0].trim();
+    // Validate: must be a short alphanumeric code, not purely numeric
+    if (classCode.length > 5 || /^\d+$/.test(classCode)) continue;
+    // Must be a known class or look like one
+    if (!(classCode in CLASS_NAMES) && !/^[123][AEC]$/.test(classCode) &&
+        !["SL", "CC", "EC", "2S", "FC"].includes(classCode)) continue;
+    
+    results.push({
+      classCode,
+      total: parseInt(fields[1] || "0"),
+      available: parseInt(fields[2] || "0"),
+      rac: parseInt(fields[3] || "0"),
+      wl: parseInt(fields[4] || "0"),
+      fare: parseInt(fields[8] || fields[9] || "0"),
     });
   }
-
-  // Pattern 3: JSON-LD or embedded data in script tags
-  if (classes.length === 0) {
-    const scriptData = $("script#availability-data, script[data-availability]").text();
-    if (scriptData) {
-      try {
-        const jsonData = JSON.parse(scriptData);
-        if (Array.isArray(jsonData)) {
-          jsonData.forEach((item: any) => {
-            const code = item.classCode || item.code || item.class;
-            if (!code) return;
-
-            const statusText = item.status || item.availability || item.seatStatus || "";
-            const parsed = parseSeatStatus(statusText);
-
-            classes.push({
-              classCode: String(code),
-              className: item.className || item.name || CLASS_NAMES[String(code)] || String(code),
-              status: parsed.status,
-              available: parsed.available || parseInt(item.available || item.avl || "0"),
-              waitlistNumber: parsed.waitlistNumber || item.waitlistNumber,
-              fare: parseInt(item.fare || item.price || item.ticketFare || "0"),
-              isTatkal: !!item.isTatkal,
-            });
-          });
-        }
-      } catch { /* Invalid JSON */ }
-    }
-  }
-
-  return classes;
+  
+  return results;
 }
 
 /* ─── Main Scraper Functions ──────────────────────────────── */
-
-function getAvailabilityURL(
-  trainNo: string,
-  from: string,
-  to: string,
-  date: string,
-  quota: string
-): string {
-  const dateParts = date.split("-");
-  const erailDate = `${dateParts[2]}${dateParts[1]}${dateParts[0]}`;
-  return SOURCES.AVAILABILITY(trainNo, from.toUpperCase(), to.toUpperCase(), erailDate, quota);
-}
 
 export async function getAvailability(
   trainNo: string,
@@ -272,56 +129,52 @@ export async function getAvailability(
   to: string,
   date: string,
   quota = "GN"
-): Promise<ScrapeResult<AvailabilityResponse>> {  const cacheKey = `avail:${trainNo}:${from}:${to}:${date}:${quota}`;
+): Promise<ScrapeResult<AvailabilityResponse>> {
+  if (!/^\d{4,5}$/.test(trainNo)) {
+    return fail(ERROR_CODES.INVALID_INPUT, "Train number must be 4-5 digits");
+  }
+
+  const cacheKey = `avail:${trainNo}:${from}:${to}:${date}:${quota}`;
 
   return cache.getOrRefresh<AvailabilityResponse>(
     cacheKey,
     CONFIG.CACHE.AVAIL_TTL,
     async () => {
-      const url = getAvailabilityURL(trainNo, from, to, date, quota);
-      const raw = await scraperClient.get(url, "https://erail.in/");
+      // Fetch train info from proven erail.in data API
+      const raw = await scraperClient.get(
+        SOURCES.TRAIN_INFO(trainNo),
+        "https://erail.in/"
+      );
 
-      const $ = cheerio.load(raw);
-      let classes = parseAvailabilityTable($);
-
-      // Fallback: pipe-delimited format
-      if (classes.length === 0) {
-        const blocks = raw.split("~~~~~~~~").filter(Boolean);
-        for (const block of blocks) {
-          const lines = block.split("~^");
-          if (lines.length < 2) continue;
-          const fields = lines[1].split("~").filter(Boolean);
-          if (fields.length >= 3) {
-            const classCode = clean(fields[0]).toUpperCase();
-            const statusText = clean(fields[1]);
-            const fareText = clean(fields[2]);
-            if (!classCode || classCode.includes("CLASS")) continue;
-
-            const parsed = parseSeatStatus(statusText);
-            const fareMatch = fareText.match(/[\d,]+/);
-            const fare = fareMatch ? parseInt(fareMatch[0].replace(/,/g, "")) : 0;
-            classes.push({
-              classCode,
-              className: CLASS_NAMES[classCode] || classCode,
-              status: parsed.status,
-              available: parsed.available,
-              waitlistNumber: parsed.waitlistNumber,
-              fare,
-              isTatkal: false,
-            });
-          }
-        }
+      // Parse train header info (reuses parser from infoScraper)
+      const header = parseErailTrainInfo(raw);
+      if (!header) {
+        throw new Error("NOT_FOUND");
       }
 
-      if (classes.length === 0) {
+      // Parse class data from the pipe-delimited response
+      const classEntries = parseClassData(raw);
+
+      if (classEntries.length === 0) {
         throw new Error("PARSE_FAILURE");
       }
 
+      // Build class availability list
+      const classes: ClassAvailability[] = classEntries.map((entry) => ({
+        classCode: entry.classCode,
+        className: CLASS_NAMES[entry.classCode] || entry.classCode,
+        status: entry.available > 0 ? "AVAILABLE" : "NOT_AVAILABLE",
+        available: entry.available,
+        fare: entry.fare,
+        isTatkal: false,
+      }));
+
+      // Build response
       return {
-        trainNo,
-        trainName: "",
-        from: { code: from.toUpperCase(), name: "" },
-        to: { code: to.toUpperCase(), name: "" },
+        trainNo: header.train_no || trainNo,
+        trainName: header.train_name || "",
+        from: { code: from.toUpperCase(), name: header.from_stn_name || "" },
+        to: { code: to.toUpperCase(), name: header.to_stn_name || "" },
         date,
         quota: quota.toUpperCase(),
         classes,
@@ -335,8 +188,11 @@ export async function getAvailability(
   )
   .catch((err: any) => {
     const msg = err.message || "Unknown error";
+    if (msg === "NOT_FOUND") {
+      return fail(ERROR_CODES.NOT_FOUND, `Train ${trainNo} not found`, false);
+    }
     if (msg === "PARSE_FAILURE") {
-      return fail(ERROR_CODES.PARSE_FAILURE, "Could not parse availability data — the page structure may have changed", true);
+      return fail(ERROR_CODES.PARSE_FAILURE, "Could not parse availability data from train info response", true);
     }
     if (msg.includes("timeout") || msg.includes("TIMEOUT"))
       return fail(ERROR_CODES.TIMEOUT, msg, true);
