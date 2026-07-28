@@ -6,7 +6,6 @@
   "installCommand": "npm install",
   "outputDirectory": ".next",
   "regions": ["bom1", "gru1", "hkg1", "iad1", "sin1"],
-  "public": true,
   "github": {
     "silent": true,
     "autoJobCancelation": true
