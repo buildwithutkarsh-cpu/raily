@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useUser, useClerk } from "@clerk/nextjs";
+import Link from "next/link";
 import {
   User,
   ChevronDown,
@@ -39,13 +40,13 @@ export default function UserMenu() {
 
   if (!isSignedIn || !user) {
     return (
-      <a
+      <Link
         href="/sign-in"
         className="flex items-center gap-2 px-4 py-2 border-2 border-[var(--fg)] text-xs uppercase tracking-[0.1em] font-semibold hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-colors"
       >
         <User className="h-3.5 w-3.5" />
         Sign In
-      </a>
+      </Link>
     );
   }
 

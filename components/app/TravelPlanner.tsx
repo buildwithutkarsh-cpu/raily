@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  Calendar,
   Plus,
   Train,
   Sparkles,

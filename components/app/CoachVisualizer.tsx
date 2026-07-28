@@ -9,7 +9,6 @@ import {
   Info,
   Check,
   Sparkles,
-  ArrowRight,
   Maximize2,
   Minimize2,
   Train,
@@ -233,7 +232,7 @@ const tierShort: Record<string, string> = {
 /* ─── Component ────────────────────────────────────────────── */
 
 export default function CoachVisualizer() {
-  const { state, setSelectedCoach, setSelectedSeat, setSeatRecommendation, confirmBooking } =
+  const { state, setSelectedCoach, setSelectedSeat, confirmBooking } =
     useBooking();
 
   const [expanded, setExpanded] = useState(false);

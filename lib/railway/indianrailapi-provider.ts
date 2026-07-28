@@ -20,7 +20,6 @@ import type {
   FareEnquiry,
   CoachComposition,
   TrainSchedule,
-  Station,
 } from "./types";
 import { RailwayAPIError, RailwayRateLimitError } from "./client";
 
@@ -81,7 +80,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
       date: params.date,
     });
 
-    const trains: TrainSearchEntry[] = (data?.data || []).map((t, idx) => {
+    const trains: TrainSearchEntry[] = (data?.data || []).map((t) => {
       const availableClasses = (t.classes || [])
         .filter((c) => c.available)
         .map((c) => ({
@@ -312,7 +311,7 @@ export class IndianRailAPIProvider implements RailwayProvider {
 
   /* ─── Live Status ─────────────────────────────────────────── */
 
-  async getLiveStatus(trainNumber: string, _station?: string): Promise<LiveStatus> {
+  async getLiveStatus(trainNumber: string, station?: string): Promise<LiveStatus> {
     const data = await this.fetch<{
       data: {
         train_number: string;
@@ -485,7 +484,8 @@ export class IndianRailAPIProvider implements RailwayProvider {
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
-function inferTrainType(name: string, _number: string): TrainSearchEntry["train"]["type"] {
+function inferTrainType(name: string, number: string): TrainSearchEntry["train"]["type"] {
+  void number; // unused but kept for API compatibility
   const upper = name.toUpperCase();
   if (upper.includes("RAJDHANI")) return "RAJDHANI";
   if (upper.includes("SHATABDI")) return "SHATABDI";

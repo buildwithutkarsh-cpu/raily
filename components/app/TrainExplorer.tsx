@@ -11,11 +11,10 @@ import {
   Zap,
   Wallet,
   Sofa,
-  TrendingUp,
   Info,
   ChevronRight,
 } from "lucide-react";
-import { useBooking, type Train as TrainType } from "@/lib/booking-store";
+import { useBooking } from "@/lib/booking-store";
 
 /* ── Badge Config ──────────────────────────────────────────── */
 

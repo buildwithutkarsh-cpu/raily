@@ -1,9 +1,6 @@
 "use client";
 
-"use client";
-
 import { useEffect, useRef, useState } from "react";
-
 import { ArrowRight } from "lucide-react";
 
 /**
@@ -27,7 +24,6 @@ export default function Hero({
 }: {
   onEnter?: () => void;
 }) {
-  const [showEnterButton, setShowEnterButton] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const isMorphingRef = useRef(false);
   const typingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -91,7 +87,6 @@ export default function Hero({
   useEffect(() => {
     let ticking = false;
     let typingStarted = false;
-    let enterButtonShown = false;
     let typingInterval: ReturnType<typeof setInterval> | null = null;
 
     const handleScroll = () => {
@@ -190,12 +185,6 @@ export default function Hero({
             startTyping();
           }
 
-          // Show ENTER RAILY button when terminal has expanded
-          if (p > 0.88 && !enterButtonShown) {
-            enterButtonShown = true;
-            setShowEnterButton(true);
-          }
-
           // Animate ENTER RAILY button appearance (fade + slide up)
           if (enterButtonRef.current && p > 0.85) {
             const btnReveal = Math.min(Math.max((p - 0.85) / 0.15, 0), 1);
@@ -231,7 +220,7 @@ export default function Hero({
       let charIndex = 0;
 
       typingInterval = setInterval(() => {
-      typingIntervalRef.current = typingInterval;
+        typingIntervalRef.current = typingInterval;
         if (lineIndex >= lines.length) {
           if (typingInterval) clearInterval(typingInterval);
           return;

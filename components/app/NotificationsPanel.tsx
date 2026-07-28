@@ -5,7 +5,6 @@ import {
   Bell,
   Train,
   Clock,
-  AlertCircle,
   CheckCircle,
   Info,
   ArrowRight,

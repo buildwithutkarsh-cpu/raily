@@ -21,7 +21,6 @@ import type {
   FareEnquiry,
   CoachComposition,
   TrainSchedule,
-  StationRef,
 } from "./types";
 
 /* ─── Station Database ─────────────────────────────────────── */
@@ -213,7 +212,6 @@ export class MockRailwayProvider implements RailwayProvider {
 
     const entries: TrainSearchEntry[] = directTrains.map((t, idx) => {
       const totalSeats = t.classes.reduce((sum, c) => sum + (c.seats || 0), 0);
-      const availSeats = Math.floor(totalSeats * (0.35 + (idx * 0.08)));
 
       // Assign recommendation badges
       let badge: TrainSearchEntry["recommendation"] = undefined;
@@ -258,7 +256,7 @@ export class MockRailwayProvider implements RailwayProvider {
         train: {
           number: t.number,
           name: t.name,
-          type: t.type as any,
+          type: t.type as TrainSearchEntry["train"]["type"],
           from: { code: fromCode, name: fromStation?.name || fromCode },
           to: { code: toCode, name: toStation?.name || toCode },
           departure: t.departure,
@@ -314,12 +312,11 @@ export class MockRailwayProvider implements RailwayProvider {
 
       for (let i = 0; i < extraTrains.length && entries.length < 5; i++) {
         const et = extraTrains[i];
-        const dur = durationToMinutes(et.duration);
         entries.push({
           train: {
             number: et.number,
             name: `Delhi ${et.name}`,
-            type: et.type as any,
+            type: et.type as TrainSearchEntry["train"]["type"],
             from: { code: fromCode, name: fromStation?.name || fromCode },
             to: { code: toCode, name: toStation?.name || toCode },
             departure: et.departure,
@@ -340,7 +337,7 @@ export class MockRailwayProvider implements RailwayProvider {
               name: c.name,
               available: c.seats > 0,
               fare: c.fare,
-            })),
+            })) as any,
           },
           availableClasses: et.seats
             .filter((c) => c.seats > 0)
@@ -507,7 +504,8 @@ export class MockRailwayProvider implements RailwayProvider {
     };
   }
 
-  async getLiveStatus(trainNumber: string, _station?: string): Promise<LiveStatus> {
+  async getLiveStatus(trainNumber: string, station?: string): Promise<LiveStatus> {
+    void station;
     await delay(200 + Math.random() * 400);
     const train = TRAINS.find((t) => t.number === trainNumber);
 

@@ -21,7 +21,6 @@ import {
   Train,
   Map,
   Clock,
-  Ticket,
 } from "lucide-react";
 
 function WelcomeContent() {
@@ -282,9 +281,10 @@ function AppLayoutInner({
   // Auto-switch to search section when booking starts
   useEffect(() => {
     if (state.step !== "idle" && activeSection !== "search") {
-      setActiveSection("search");
+      setActiveSection("search" as AppSection);
     }
-  }, [state.step, activeSection]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync of booking step with section
+  }, [state.step]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg)] text-[var(--fg)]">

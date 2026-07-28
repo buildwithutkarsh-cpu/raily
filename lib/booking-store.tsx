@@ -178,7 +178,7 @@ function convertToFrontendTrain(
   };
 }
 
-export function getSeatRecommendation(train: Train): SeatRecommendation {
+export function getSeatRecommendation(_train: Train): SeatRecommendation {
   return {
     seatId: "7L",
     number: 7,
@@ -206,11 +206,11 @@ interface BookingContextValue {
   /** Fetch trains from the Railway API (real or mock) */
   fetchTrains: (query: ExtractedQuery) => Promise<void>;
   /** Check PNR status via the Railway API */
-  fetchPNR: (pnr: string) => Promise<ApiResponse<any>>;
+  fetchPNR: (pnr: string) => Promise<ApiResponse<unknown>>;
   /** Search stations via the Railway API */
-  searchStations: (q: string) => Promise<ApiResponse<any>>;
+  searchStations: (q: string) => Promise<ApiResponse<unknown>>;
   /** Get live status via Railway API */
-  fetchLiveStatus: (trainNumber: string) => Promise<ApiResponse<any>>;
+  fetchLiveStatus: (trainNumber: string) => Promise<ApiResponse<unknown>>;
 }
 
 const BookingContext = createContext<BookingContextValue | null>(null);
@@ -309,7 +309,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
           timestamp: result.timestamp,
         },
       }));
-    } catch (err) {
+    } catch {
       setState((prev) => ({
         ...prev,
         isProcessing: false,

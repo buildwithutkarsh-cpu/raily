@@ -9,8 +9,6 @@ import {
   User,
   ChevronRight,
   Sparkles,
-  Info,
-  CheckCircle,
   Clock,
   MapPin,
   Train,

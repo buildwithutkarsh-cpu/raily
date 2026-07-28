@@ -4,7 +4,6 @@ import { motion } from "framer-motion";
 import {
   Check,
   Train,
-  MapPin,
   Clock,
   Ticket,
   Download,

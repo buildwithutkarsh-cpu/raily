@@ -1,14 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import {
   MapPin,
   Train,
   Clock,
-  AlertCircle,
   Utensils,
   Flag,
-  CheckCircle,
   Navigation,
   Coffee,
 } from "lucide-react";
@@ -144,7 +141,6 @@ export default function JourneyTracker() {
 
         <div className="space-y-0">
           {journey.map((step, index) => {
-            const Icon = step.icon;
             const isActive = step.status === "active";
             const isCompleted = step.status === "completed";
 
