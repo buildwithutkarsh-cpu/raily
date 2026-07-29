@@ -34,10 +34,11 @@ describe("Security Headers", () => {
   it("returns 404 for unknown endpoints with clean error (no stack)", async () => {
     const res = await request(app).get("/api/v1/nonexistent");
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({
-      success: false,
-      error: "Endpoint not found. See GET / for available endpoints.",
-    });
+    expect(res.body).toHaveProperty("success", false);
+    expect(res.body.error).toHaveProperty("code", "NOT_FOUND");
+    expect(res.body.error).toHaveProperty("message", "Endpoint not found. See GET / for available endpoints.");
+    expect(res.body.error).toHaveProperty("retryable", false);
+    expect(res.body).toHaveProperty("timestamp");
   });
 
   it("handles OPTIONS preflight successfully (returns 204)", async () => {
@@ -72,8 +73,9 @@ describe("Rate Limiting Enforcement (API-level 429)", () => {
     const limitedRes = await request(app).get(endpoint);
     if (limitedRes.status === 429) {
       expect(limitedRes.body).toHaveProperty("success", false);
-      expect(limitedRes.body.error).toBe("RATE_LIMIT_EXCEEDED");
-      expect(limitedRes.body).toHaveProperty("retryAfter");
+      expect(limitedRes.body.error).toHaveProperty("code", "RATE_LIMITED");
+      expect(limitedRes.body.error).toHaveProperty("message");
+      expect(limitedRes.body).toHaveProperty("timestamp");
     }
   });
 });
@@ -113,10 +115,9 @@ describe("PII Not Exposed", () => {
     const res = await request(app).get("/api/v1/nonexistent");
     expect([200, 404, 429]).toContain(res.status);
     if (res.status === 404) {
-      expect(res.body).toEqual({
-        success: false,
-        error: "Endpoint not found. See GET / for available endpoints.",
-      });
+      expect(res.body).toHaveProperty("success", false);
+      expect(res.body.error).toHaveProperty("code", "NOT_FOUND");
+      expect(res.body.error).toHaveProperty("message");
     }
     // No stack traces regardless of status
     expect(JSON.stringify(res.body)).not.toMatch(/Error:|at\s\w+|stack|eval|Function/);

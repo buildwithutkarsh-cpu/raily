@@ -82,17 +82,17 @@ describe("Chaos: Upstream HTTP Errors", () => {
     expect(unhandledRejections.length).toBe(0);
   });
 
-  it("handles HTTP 429 Rate Limited from confirmtkt gracefully", async () => {
-    nock("https://www.confirmtkt.com")
-      .get(/\/pnr-status\//)
-      .times(4)
+  it("handles HTTP 429 Rate Limited from indianrail.gov.in gracefully", async () => {
+    nock("https://www.indianrail.gov.in")
+      .get(/\/enquiry\/captchaDraw\.png/)
+      .times(1)
       .reply(429, "Too Many Requests", { "Retry-After": "60" });
 
     const res = await request(app).get("/api/v1/pnr/1234567890");
 
     expect(res.body).toHaveProperty("success", false);
-    expect(res.body).toHaveProperty("error");
-    expect(res.body).toHaveProperty("retryable", true);
+    expect(res.body.error).toHaveProperty("code");
+    expect(res.body.error).toHaveProperty("retryable", true);
     expect(unhandledRejections.length).toBe(0);
   });
 
@@ -118,26 +118,27 @@ describe("Chaos: Scrambled & Mutated HTML", () => {
     nock.cleanAll();
   });
 
-  it("handles completely empty HTML response from confirmtkt", async () => {
-    nock("https://www.confirmtkt.com")
-      .get(/\/pnr-status\//)
+  it("handles completely empty HTML response from indianrail.gov.in", async () => {
+    nock("https://www.indianrail.gov.in")
+      .get(/\/enquiry\/captchaDraw\.png/)
       .reply(200, "");
 
     const res = await request(app).get("/api/v1/pnr/1234567891");
 
     expect(res.body).toHaveProperty("success", false);
-    expect(res.body).toHaveProperty("error");
+    expect(res.body.error).toHaveProperty("code");
     expect(unhandledRejections.length).toBe(0);
   });
 
-  it("handles HTML with missing script tags from confirmtkt", async () => {
-    nock("https://www.confirmtkt.com")
-      .get(/\/pnr-status\//)
-      .reply(200, "<html><body><h1>PNR Status</h1><p>No data available</p></body></html>");
+  it("handles HTML with missing script tags from indianrail.gov.in", async () => {
+    nock("https://www.indianrail.gov.in")
+      .get(/\/enquiry\/captchaDraw\.png/)
+      .reply(200, "<html><body><h1>System Error</h1><p>Invalid request</p></body></html>");
 
     const res = await request(app).get("/api/v1/pnr/1234567892");
 
     expect(res.body).toHaveProperty("success", false);
+    expect(res.body.error).toHaveProperty("code");
     expect(unhandledRejections.length).toBe(0);
   });
 
