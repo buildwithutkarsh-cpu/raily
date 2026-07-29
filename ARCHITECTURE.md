@@ -435,32 +435,24 @@ AppLayout
 
 | Component | File | Props | State | Notes |
 |-----------|------|-------|-------|-------|
-| `AppLayout` | `components/app/AppLayout.tsx` | none | none | Wraps `BookingProvider`, renders `TopBar` inline + `AIAssistantPanel` |
-| `AIAssistantPanel` | `components/app/AIAssistantPanel.tsx` | none | `isProcessing` | Main chat interface, reads `state.messages` from `useBooking()` |
-| `ChatInput` | (inline in AIAssistantPanel) | `onSend`, `disabled` | `input` | Auto-focuses on mount, Enter to submit |
-| `ChatMessage` | (inline in AIAssistantPanel) | `message`, `onSuggestionClick` | none | Animated entrance via framer-motion |
-| `MessageContent` | (inline in AIAssistantPanel) | `message`, `onSuggestionClick` | none | Routes to inline components or renders formatted text |
-| `TrainExplorer` | `components/app/TrainExplorer.tsx` | none | `sortBy` | Reads `state.trains` + `state.query` from `useBooking()` |
-| `CoachVisualizer` | `components/app/CoachVisualizer.tsx` | none | `coachIndex` | Reads `state.selectedTrain` from `useBooking()` |
-| `BookingConfirmation` | `components/app/BookingConfirmation.tsx` | none | none | Reads `state` from `useBooking()` |
-| `JourneyTracker` | `components/app/JourneyTracker.tsx` | none | `trainName`, `trainNumber`, `currentSpeed`, `delay` | Hardcoded mock data |
-| `PNRManager` | `components/app/PNRManager.tsx` | none | none | Hardcoded mock data |
-| `BookingHistory` | `components/app/BookingHistory.tsx` | none | `selected` | Hardcoded mock bookings |
-| `UserMenu` | `components/app/UserMenu.tsx` | none | none | Sign out button, reads Clerk's `useAuth` |
-| `WelcomeMessage` | (inline in AIAssistantPanel) | `onSuggestionClick` | none | Static welcome UI with suggestion buttons |
+| `AppLayout` | `components/layout/AppLayout.tsx` | none | none | Wraps `BookingProvider`, renders `TopBar` inline + `AIAssistantPanel` |
+| `AIAssistantPanel` | `components/chat/ChatPanel.tsx` | none | `isProcessing` | Main chat interface, reads `state.messages` from `useBooking()` |
+| `ChatInput` | (inline in ChatPanel) | `onSend`, `disabled` | `input` | Auto-focuses on mount, Enter to submit |
+| `ChatMessage` | (inline in ChatPanel) | `message`, `onSuggestionClick` | none | Animated entrance via framer-motion |
+| `MessageContent` | (inline in ChatPanel) | `message`, `onSuggestionClick` | none | Routes to inline components or renders formatted text |
+| `TrainExplorer` | `components/trains/TrainExplorer.tsx` | none | `sortBy` | Reads `state.trains` + `state.query` from `useBooking()` |
+| `CoachVisualizer` | `components/coach/CoachVisualizer.tsx` | none | `coachIndex` | Reads `state.selectedTrain` from `useBooking()` |
+| `BookingConfirmation` | `components/booking/BookingConfirmation.tsx` | none | none | Reads `state` from `useBooking()` |
+| `JourneyTracker` | `components/journey/JourneyTracker.tsx` | none | `trainName`, `trainNumber`, `currentSpeed`, `delay` | Hardcoded mock data |
+| `PNRManager` | `components/pnr/PNRManager.tsx` | none | none | Hardcoded mock data |
+| `BookingHistory` | `components/booking/BookingHistory.tsx` | none | `selected` | Hardcoded mock bookings |
+| `WelcomeMessage` | (inline in ChatPanel) | `onSuggestionClick` | none | Static welcome UI with suggestion buttons |
 
 ### Dead Components (Not Imported)
 
 | Component | File | Notes |
 |-----------|------|-------|
-| `AppSidebar` | `components/app/AppSidebar.tsx` | Old dashboard sidebar |
-| `TopBar` | `components/app/TopBar.tsx` | Duplicate — inline version in AppLayout used |
-| `NotificationsPanel` | `components/app/NotificationsPanel.tsx` | Stub, never imported |
-| `TravelPlanner` | `components/app/TravelPlanner.tsx` | Stub, never imported |
-| `Hero` | `components/Hero.tsx` | Old GSAP hero |
-| `LandingHeader` | `components/LandingHeader.tsx` | Old GSAP header |
-| `LandingSections` | `components/LandingSections.tsx` | Old GSAP sections |
-| `Cursor` | `components/Cursor.tsx` | Old custom cursor |
+| _(All dead components from the old architecture have been removed from the codebase)_ |
 
 ---
 
@@ -704,12 +696,12 @@ Uses `pdfkit` to generate a PDF ticket and `resend` to email it. Requires `RESEN
 
 | Aspect | Groq (Primary) | OpenRouter (Fallback) |
 |--------|----------------|----------------------|
-| **Env Var** | `NEXT_PUBLIC_GROQ_API_KEY` | `NEXT_PUBLIC_OPENROUTER_API_KEY` |
+| **Env Var** | `GROQ_API_KEY` (server-only) | `OPENROUTER_API_KEY` (server-only) |
 | **Model** | `llama-3.3-70b-versatile` | `google/gemini-2.0-flash-001` |
 | **Base URL** | `https://api.groq.com/openai/v1` | `https://openrouter.ai/api/v1` |
 | **Max Tokens** | 4096 | 4096 |
 | **Temperature** | 0.3 | 0.3 |
-| **Switch** | Change `NEXT_PUBLIC_AI_PROVIDER` in `.env.local` | |
+| **Switch** | Change `AI_PROVIDER` in `.env.local` | |
 
 ### 9.3 Tool Definitions
 
@@ -1024,8 +1016,8 @@ Mechanical, not playful:
 |--------|---------|---------|
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk | `.env.local` |
 | `CLERK_SECRET_KEY` | Clerk | `.env.local` |
-| `NEXT_PUBLIC_GROQ_API_KEY` | AI Provider | `.env.local` |
-| `NEXT_PUBLIC_OPENROUTER_API_KEY` | AI Provider | `.env.local` |
+| `GROQ_API_KEY` (server-only) | AI Provider | `.env.local` |
+| `OPENROUTER_API_KEY` (server-only) | AI Provider | `.env.local` |
 | `RESEND_API_KEY` | Email | `.env.local` |
 | `ADMIN_KEY` | RAPI cache flush | `.env` (Rapi) |
 
@@ -1212,9 +1204,9 @@ Same frontend + AI layer, but with:
 |----------|----------|---------|-------------|
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Yes | — | Clerk publishable key |
 | `CLERK_SECRET_KEY` | Yes | — | Clerk secret key |
-| `NEXT_PUBLIC_GROQ_API_KEY` | Yes* | — | Groq API key (for AI) |
-| `NEXT_PUBLIC_AI_PROVIDER` | No | `groq` | AI provider: `groq` or `openrouter` |
-| `NEXT_PUBLIC_OPENROUTER_API_KEY` | No | — | OpenRouter API key (fallback) |
+| `GROQ_API_KEY` | Yes* | — | Groq API key (server-only, for AI) |
+| `AI_PROVIDER` | No | `groq` | AI provider: `groq` or `openrouter` |
+| `OPENROUTER_API_KEY` | No | — | OpenRouter API key (server-only, fallback) |
 | `NEXT_PUBLIC_RAPI_BASE_URL` | No | `http://localhost:3001` | RAPI server URL |
 | `RESEND_API_KEY` | No | — | Resend key for email tickets |
 | `ADMIN_KEY` | No | — | RAPI admin key for cache flush |
