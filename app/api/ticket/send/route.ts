@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
-import { generateTicketPDF } from "@/lib/ticket-pdf";
+import { generateTicketPDF } from "@/lib/ticket/pdf";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
