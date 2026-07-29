@@ -3,6 +3,8 @@
    Clean HTML/raw-text into structured JSON
    ══════════════════════════════════════════════════════════════ */
 
+import type { RouteStation, TrainSearchEntry } from "../types";
+
 /**
  * Clean a string: trim, collapse whitespace, remove \n \t
  */
@@ -28,18 +30,44 @@ export function sanitizeHTML(str: string): string {
     .trim();
 }
 
+export interface ErailTrainInfo {
+  train_no: string;
+  train_name: string;
+  from_stn_name: string;
+  from_stn_code: string;
+  to_stn_name: string;
+  to_stn_code: string;
+  from_time: string;
+  to_time: string;
+  travel_time: string;
+  running_days: string;
+  train_type: string;
+  train_id: string;
+  distance: string;
+  avg_speed: string;
+}
+
+export interface ErailRouteStation {
+  stnCode: string;
+  stnName: string;
+  arrival: string;
+  departure: string;
+  distance: number;
+  day: number;
+  zone: string;
+}
+
 /**
  * Parse erail.in pipe-delimited train search response.
- * Format: ~~~header~~~^field1~field2~field3...~~~~~~~~
+ * Returns camelCase entries matching TrainSearchEntry.
  */
-export function parseErailTrains(raw: string): any[] {
+export function parseErailTrains(raw: string): TrainSearchEntry[] {
   const blocks = raw.split("~~~~~~~~").filter(Boolean);
   if (!blocks.length) return [];
 
-  const trains: any[] = [];
+  const trains: TrainSearchEntry[] = [];
 
   for (const block of blocks) {
-    // Each block has format: header~^~field1~field2~field3...
     const lines = block.split("~^");
     if (lines.length < 2) continue;
 
@@ -47,20 +75,20 @@ export function parseErailTrains(raw: string): any[] {
     if (fields.length < 14) continue;
 
     trains.push({
-      train_no: fields[0] || "",
-      train_name: fields[1] || "",
-      source_stn_name: fields[2] || "",
-      source_stn_code: fields[3] || "",
-      dstn_stn_name: fields[4] || "",
-      dstn_stn_code: fields[5] || "",
-      from_stn_name: fields[6] || "",
-      from_stn_code: fields[7] || "",
-      to_stn_name: fields[8] || "",
-      to_stn_code: fields[9] || "",
-      from_time: fields[10] || "",
-      to_time: fields[11] || "",
-      travel_time: fields[12] || "",
-      running_days: fields[13] || "",
+      trainNumber: fields[0] || "",
+      trainName: fields[1] || "",
+      sourceStationName: fields[2] || "",
+      sourceStationCode: fields[3] || "",
+      destinationStationName: fields[4] || "",
+      destinationStationCode: fields[5] || "",
+      fromStationName: fields[6] || "",
+      fromStationCode: fields[7] || "",
+      toStationName: fields[8] || "",
+      toStationCode: fields[9] || "",
+      fromTime: fields[10] || "",
+      toTime: fields[11] || "",
+      travelTime: fields[12] || "",
+      runningDays: fields[13] || "",
     });
   }
 
@@ -70,13 +98,11 @@ export function parseErailTrains(raw: string): any[] {
 /**
  * Parse erail.in train info response (single train).
  */
-export function parseErailTrainInfo(raw: string): any {
+export function parseErailTrainInfo(raw: string): ErailTrainInfo | null {
   const blocks = raw.split("~~~~~~~~").filter(Boolean);
   if (blocks.length < 2) return null;
 
-  // Block 0: header info
   const headerFields = blocks[0].split("~").filter(Boolean);
-  // Block 1: detailed info
   const detailFields = blocks[1].split("~").filter(Boolean);
 
   return {
@@ -101,9 +127,9 @@ export function parseErailTrainInfo(raw: string): any {
  * Parse erail.in route response.
  * Format: ~^code~name~arrival~departure~~distance~day~~~~zone
  */
-export function parseErailRoute(raw: string): any[] {
+export function parseErailRoute(raw: string): ErailRouteStation[] {
   const entries = raw.split("~^").filter(Boolean);
-  const stations: any[] = [];
+  const stations: ErailRouteStation[] = [];
 
   for (const entry of entries) {
     const fields = entry.split("~").filter(Boolean);
@@ -122,5 +148,3 @@ export function parseErailRoute(raw: string): any[] {
 
   return stations;
 }
-
-

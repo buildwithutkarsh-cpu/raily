@@ -1,18 +1,6 @@
 /* ══════════════════════════════════════════════════════════════
    RAPI — PNR Status Scraper
-   
    Source: Indian Railways Official Enquiry Portal
-   (https://www.indianrail.gov.in/enquiry/)
-   
-   Strategy:
-     1. Get a session cookie from Indian Railways
-     2. Download the CAPTCHA image (simple math: "5+3=" or "9-4=")
-     3. OCR the CAPTCHA using tesseract.js (singleton worker)
-     4. Solve the math problem
-     5. Submit the PNR request with the captcha solution
-     6. Parse the JSON response
-   
-   This is the same approach used by erail.in for PNR status.
    ══════════════════════════════════════════════════════════════ */
 
 import axios, { AxiosInstance } from "axios";
@@ -24,52 +12,16 @@ import { ScrapeResult, ok, cachedRes, fail } from "./client";
 import { ERROR_CODES } from "../utils/errors";
 import { cache } from "../cache";
 import { CONFIG } from "../config";
+import type { PNRResponse, PassengerInfo } from "../types";
 
-/* ─── Types ────────────────────────────────────────────────── */
-
-export interface PassengerInfo {
-  serialNumber: string;
-  coachPosition: number;
-  booking: {
-    status: string;
-    coach: string | null;
-    berthNo: number | null;
-    berthCode: string | null;
-    details: string;
-  };
-  current: {
-    status: string;
-    coach: string | null;
-    berthNo: number | null;
-    berthCode: string | null;
-    details: string;
-  };
-}
-
-export interface PNRResponse {
-  pnr: string;
-  train: { number: string; name: string };
-  journey: {
-    date: string;
-    class: string;
-    quota: string;
-    source: { code: string; name: string };
-    destination: { code: string; name: string };
-    boardingPoint: { code: string; name: string };
-    distance: number;
-  };
-  chart: { status: string; prepared: boolean };
-  booking: { fare: number; ticketFare: number; bookingDate: string };
-  passengers: PassengerInfo[];
-}
-
-/* ─── IR Session Client ───────────────────────────────────── */
+/* ─── Configuration ───────────────────────────────────────── */
 
 const IR_BASE = "https://www.indianrail.gov.in";
 const IR_CAPTCHA_URL = `${IR_BASE}/enquiry/captchaDraw.png`;
 const IR_PNR_URL = `${IR_BASE}/enquiry/CommonCaptcha`;
 
-// Shared cookie jar + axios instance for the IR session
+/* ─── IR Session Client ───────────────────────────────────── */
+
 let irCookieJar: CookieJar | null = null;
 let irClient: AxiosInstance | null = null;
 
@@ -85,7 +37,7 @@ function getIRClient(): AxiosInstance {
       axios.create({
         timeout: 15_000,
         maxRedirects: 5,
-        validateStatus: (status) => status < 500,
+        validateStatus: (status: number) => status < 500,
         withCredentials: true,
         headers: {
           "User-Agent":
@@ -96,8 +48,9 @@ function getIRClient(): AxiosInstance {
         },
       })
     );
-    (irClient.defaults as any).jar = irCookieJar;
-    (irClient.defaults as any).withCredentials = true;
+    const clientWithJar = irClient as unknown as Record<string, unknown>;
+    clientWithJar.jar = irCookieJar;
+    clientWithJar.withCredentials = true;
   }
   return irClient;
 }
@@ -109,22 +62,25 @@ let tessWorker: Worker | null = null;
 async function getTessWorker(): Promise<Worker> {
   if (!tessWorker) {
     tessWorker = await createWorker("eng", 1, {
-      logger: () => {}, // silence logs
+      logger: () => {},
     });
   }
   return tessWorker;
 }
 
+interface CaptchaParseResult {
+  result: number;
+  raw: string;
+}
+
 /**
  * Fetch the Indian Railways CAPTCHA image and solve it.
  * The captcha is a simple math expression like "5+3=" or "9-4=".
- * Returns the numerical result as a string.
  */
-async function solveCaptcha(): Promise<string> {
+async function solveCaptcha(): Promise<CaptchaParseResult> {
   const client = getIRClient();
   const ts = Date.now();
 
-  // 1. Initiate session by hitting the captcha endpoint
   const imgResp = await client.get(`${IR_CAPTCHA_URL}?${ts}`, {
     responseType: "arraybuffer",
     headers: {
@@ -135,23 +91,19 @@ async function solveCaptcha(): Promise<string> {
 
   const imgBuffer = Buffer.from(imgResp.data);
 
-  // 2. Preprocess the captcha image for better OCR accuracy
-  //    The IR captcha has colored noise over simple math text
   let processedBuffer: Buffer;
   try {
     const image = await Jimp.read(imgBuffer);
     processedBuffer = await image
-      .greyscale()                         // Remove color noise
-      .contrast(0.5)                       // Increase contrast
-      .normalize()                         // Normalize brightness
-      .scale(2)                            // Upscale 2x for better OCR on small digits
+      .greyscale()
+      .contrast(0.5)
+      .normalize()
+      .scale(2)
       .getBufferAsync(Jimp.MIME_PNG);
   } catch {
-    // If preprocessing fails, fall back to raw image
     processedBuffer = imgBuffer;
   }
 
-  // 3. OCR the preprocessed captcha image using tesseract.js (singleton worker)
   const worker = await getTessWorker();
   const { data } = await worker.recognize(processedBuffer);
   const text = data.text?.trim() || "";
@@ -160,9 +112,6 @@ async function solveCaptcha(): Promise<string> {
     throw new Error("CAPTCHA_OCR_EMPTY");
   }
 
-  // 4. Parse the math expression
-  // Format is like "5+3=" or "9-4="
-  // The = sign may or may not be there
   const cleanText = text.replace(/\s/g, "").replace(/[=:]/g, "");
 
   let result = 0;
@@ -190,38 +139,39 @@ async function solveCaptcha(): Promise<string> {
     throw new Error(`CAPTCHA_OCR_FAILED: raw="${cleanText}"`);
   }
 
-  return String(result);
+  return { result, raw: cleanText };
+}
+
+interface IRRawResponse {
+  errorMessage?: string;
+  result?: Record<string, unknown>;
 }
 
 /**
  * Parse the Indian Railways PNR response JSON into our PNRResponse format.
  */
-function parseIRResponse(data: any, pnr: string): PNRResponse | null {
+function parseIRResponse(data: IRRawResponse, pnr: string): PNRResponse | null {
   if (!data || data.errorMessage || !data.result) {
     return null;
   }
 
   const r = data.result;
 
-  // Build passenger list from the passenger properties
   const passengers: PassengerInfo[] = [];
-  
-  // Indian Railways returns passengers as named properties: passenger1, passenger2, etc.
+
   const passengerKeys = Object.keys(r).filter((k) =>
     k.toLowerCase().startsWith("passenger")
   );
 
   if (passengerKeys.length > 0) {
     passengerKeys.forEach((key, idx) => {
-      const p = r[key];
+      const p = r[key] as Record<string, string> | undefined;
       if (!p) return;
 
       const bookingStatus = p.booking_status || p.bookingStatus || "";
       const currentStatus = p.current_status || p.currentStatus || "";
 
-      // Parse coach and berth info from status strings
-      // e.g., "B1 45, CNF" or "S5 032, WL 15"
-      const parseCoachBerth = (status: string) => {
+      const parseCoachBerth = (status: string): { coach: string | null; berthNo: number | null } => {
         const match = status.match(/([A-Z]+\d+)\s+(\d+)/);
         return {
           coach: match ? match[1] : null,
@@ -253,44 +203,40 @@ function parseIRResponse(data: any, pnr: string): PNRResponse | null {
     });
   }
 
-  // Extract journey date (DOJ)
-  const doj = r.doj || r.date_of_journey || r.journey_date || "";
+  const doj = (r.doj || r.date_of_journey || r.journey_date || "") as string;
 
   return {
     pnr,
     train: {
-      number: r.train_no || r.trainno || r.train_number || "",
-      name: r.train_name || r.name || r.trainName || "",
+      number: (r.train_no || r.trainno || r.train_number || "") as string,
+      name: (r.train_name || r.name || r.trainName || "") as string,
     },
     journey: {
       date: doj,
-      class: r.class || r.travel_class || r.travelClass || "",
-      quota: r.quota || r.quota_code || r.quotaCode || "GN",
+      class: (r.class || r.travel_class || r.travelClass || "") as string,
+      quota: (r.quota || r.quota_code || r.quotaCode || "GN") as string,
       source: {
-        code: r.from_stn || r.fromStn || r.source_station || r.from || "",
-        name: r.from_stn_name || r.fromStnName || r.source_station_name || "",
+        code: (r.from_stn || r.fromStn || r.source_station || r.from || "") as string,
+        name: (r.from_stn_name || r.fromStnName || r.source_station_name || "") as string,
       },
       destination: {
-        code: r.to_stn || r.toStn || r.dest_station || r.to || "",
-        name: r.to_stn_name || r.toStnName || r.dest_station_name || "",
+        code: (r.to_stn || r.toStn || r.dest_station || r.to || "") as string,
+        name: (r.to_stn_name || r.toStnName || r.dest_station_name || "") as string,
       },
       boardingPoint: {
-        code:
-          r.boarding_point || r.boardingPoint || r.from_stn || r.from || "",
-        name: r.boarding_point_name || r.boardingPointName || "",
+        code: (r.boarding_point || r.boardingPoint || r.from_stn || r.from || "") as string,
+        name: (r.boarding_point_name || r.boardingPointName || "") as string,
       },
-      distance: parseInt(r.distance || "0"),
+      distance: parseInt((r.distance || "0") as string),
     },
     chart: {
-      status: r.chart || r.chart_status || r.chartStatus || "NOT PREPARED",
-      prepared: (
-        r.chart || r.chart_status || r.chartStatus || ""
-      ).toUpperCase().includes("PREPARED"),
+      status: (r.chart || r.chart_status || r.chartStatus || "NOT PREPARED") as string,
+      prepared: ((r.chart || r.chart_status || r.chartStatus || "") as string).toUpperCase().includes("PREPARED"),
     },
     booking: {
-      fare: parseInt(r.fare || r.total_fare || r.totalFare || "0"),
-      ticketFare: parseInt(r.ticket_fare || r.ticketFare || "0"),
-      bookingDate: r.booking_date || r.bookingDate || "",
+      fare: parseInt((r.fare || r.total_fare || r.totalFare || "0") as string),
+      ticketFare: parseInt((r.ticket_fare || r.ticketFare || "0") as string),
+      bookingDate: (r.booking_date || r.bookingDate || "") as string,
     },
     passengers,
   };
@@ -301,12 +247,8 @@ function parseIRResponse(data: any, pnr: string): PNRResponse | null {
 export async function getPNRStatus(
   pnr: string
 ): Promise<ScrapeResult<PNRResponse>> {
-  // Validate PNR format
   if (!/^\d{10}$/.test(pnr)) {
-    return fail(
-      ERROR_CODES.INVALID_INPUT,
-      "PNR must be exactly 10 digits"
-    );
+    return fail(ERROR_CODES.INVALID_INPUT, "PNR must be exactly 10 digits");
   }
 
   const cacheKey = `pnr:${pnr}`;
@@ -316,21 +258,17 @@ export async function getPNRStatus(
       cacheKey,
       CONFIG.CACHE.PNR_TTL,
       async () => {
-        // 1. Solve the CAPTCHA
         let captchaSolution: string;
         try {
-          captchaSolution = await solveCaptcha();
-        } catch (err: any) {
-          // Reset session on captcha failure
+          const result = await solveCaptcha();
+          captchaSolution = String(result.result);
+        } catch (err: unknown) {
           resetIRSession();
-          throw new Error(
-            `CAPTCHA_SOLVE_FAILED: ${err.message || "Could not solve captcha"}`
-          );
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          throw new Error(`CAPTCHA_SOLVE_FAILED: ${msg}`);
         }
 
         const ts = Date.now();
-
-        // 2. Make the PNR status request with the captcha solution
         const client = getIRClient();
         let resp;
         try {
@@ -347,26 +285,21 @@ export async function getPNRStatus(
               Accept: "application/json, text/plain, */*",
             },
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           resetIRSession();
-          throw new Error(
-            `UPSTREAM_ERROR: ${err.message || "IR request failed"}`
-          );
+          const msg = err instanceof Error ? err.message : "Unknown error";
+          throw new Error(`UPSTREAM_ERROR: ${msg}`);
         }
 
-        const data = resp.data;
+        const data = resp.data as IRRawResponse;
 
-        // 3. Handle error responses from IR API
         if (data?.errorMessage) {
-          // Reset session on session/captcha errors
           if (
             data.errorMessage.includes("Session") ||
             data.errorMessage.includes("CAPTCHA") ||
             data.errorMessage.includes("Invalid")
           ) {
             resetIRSession();
-
-            // Try once more with a fresh session + captcha
             try {
               const retryCaptcha = await solveCaptcha();
               const retryResp = await client.get(IR_PNR_URL, {
@@ -374,7 +307,7 @@ export async function getPNRStatus(
                   inputPnrNo: pnr,
                   inputPage: "PNR",
                   language: "en",
-                  inputCaptcha: retryCaptcha,
+                  inputCaptcha: String(retryCaptcha.result),
                   _: Date.now(),
                 },
                 headers: {
@@ -382,27 +315,23 @@ export async function getPNRStatus(
                   Accept: "application/json, text/plain, */*",
                 },
               });
-              const retryData = retryResp.data;
+              const retryData = retryResp.data as IRRawResponse;
               if (retryData?.errorMessage) {
-                throw new Error(
-                  `UPSTREAM_ERROR: ${retryData.errorMessage}`
-                );
+                throw new Error(`UPSTREAM_ERROR: ${retryData.errorMessage}`);
               }
               const parsed = parseIRResponse(retryData, pnr);
               if (!parsed || !parsed.train.number) {
                 throw new Error("PARSE_FAILURE");
               }
               return parsed;
-            } catch (retryErr: any) {
-              throw new Error(
-                `UPSTREAM_ERROR: ${retryErr.message || "Retry also failed"}`
-              );
+            } catch (retryErr: unknown) {
+              const msg = retryErr instanceof Error ? retryErr.message : "Retry failed";
+              throw new Error(`UPSTREAM_ERROR: ${msg}`);
             }
           }
           throw new Error(`UPSTREAM_ERROR: ${data.errorMessage}`);
         }
 
-        // 4. Parse the response
         const parsed = parseIRResponse(data, pnr);
         if (!parsed || !parsed.train.number) {
           throw new Error("PARSE_FAILURE");
@@ -414,36 +343,20 @@ export async function getPNRStatus(
     .then(({ data, cached: isCached }) =>
       isCached ? cachedRes(data) : ok(data)
     )
-    .catch((err: any) => {
-      const msg = err.message || "Unknown error";
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Unknown error";
 
       if (msg.includes("CAPTCHA_SOLVE_FAILED")) {
-        return fail(
-          ERROR_CODES.UPSTREAM_ERROR,
-          `Failed to solve IR captcha: ${msg.replace("CAPTCHA_SOLVE_FAILED: ", "")}`,
-          true
-        );
+        return fail(ERROR_CODES.UPSTREAM_ERROR, `Failed to solve IR captcha`, true);
       }
       if (msg.includes("CAPTCHA_OCR_EMPTY")) {
-        return fail(
-          ERROR_CODES.UPSTREAM_ERROR,
-          "IR captcha image returned empty — retrying with fresh session",
-          true
-        );
+        return fail(ERROR_CODES.UPSTREAM_ERROR, "IR captcha image returned empty", true);
       }
       if (msg.includes("CAPTCHA_OCR_FAILED")) {
-        return fail(
-          ERROR_CODES.UPSTREAM_ERROR,
-          `IR captcha OCR could not parse the math expression`,
-          true
-        );
+        return fail(ERROR_CODES.UPSTREAM_ERROR, "IR captcha OCR could not parse math expression", true);
       }
       if (msg.includes("UPSTREAM_ERROR")) {
-        return fail(
-          ERROR_CODES.UPSTREAM_ERROR,
-          msg.replace("UPSTREAM_ERROR: ", ""),
-          true
-        );
+        return fail(ERROR_CODES.UPSTREAM_ERROR, msg.replace("UPSTREAM_ERROR: ", ""), true);
       }
       if (msg.includes("timeout") || msg.includes("TIMEOUT")) {
         return fail(ERROR_CODES.TIMEOUT, msg, true);
@@ -455,11 +368,7 @@ export async function getPNRStatus(
         return fail(ERROR_CODES.UPSTREAM_RATE_LIMIT, msg, true);
       }
       if (msg === "PARSE_FAILURE") {
-        return fail(
-          ERROR_CODES.PARSE_FAILURE,
-          "Failed to parse PNR data from Indian Railways — response format may have changed",
-          true
-        );
+        return fail(ERROR_CODES.PARSE_FAILURE, "Failed to parse PNR data — response format may have changed", true);
       }
       return fail(ERROR_CODES.UPSTREAM_ERROR, msg, true);
     });
