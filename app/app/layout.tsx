@@ -1,12 +1,12 @@
 "use client";
 
+import { ReactNode } from "react";
 import { RapiQueryProvider } from "@/lib/rapi/provider";
-import AppLayout from "@/components/layout/AppLayout";
 
-export default function AppRootLayout() {
+export default function AppRootLayout({ children }: { children: ReactNode }) {
   return (
     <RapiQueryProvider>
-      <AppLayout />
+      {children}
     </RapiQueryProvider>
   );
 }

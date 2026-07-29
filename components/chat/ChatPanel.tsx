@@ -5,12 +5,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useBooking } from "@/lib/booking-store";
 import type { Message, ChatComponentType } from "@/lib/booking-store";
 import DOMPurify from "dompurify";
-import TrainExplorer from "@/features/trains/components/TrainExplorer";
-import CoachVisualizer from "@/features/coach/components/CoachVisualizer";
-import BookingConfirmation from "@/features/booking/components/BookingConfirmation";
-import JourneyTracker from "@/features/journey/components/JourneyTracker";
-import PNRManager from "@/features/pnr/components/PNRManager";
-import BookingHistory from "@/features/booking/components/BookingHistory";
+import TrainExplorer from "@/components/trains/TrainExplorer";
+import CoachVisualizer from "@/components/coach/CoachVisualizer";
+import BookingConfirmation from "@/components/booking/BookingConfirmation";
+import JourneyTracker from "@/components/journey/JourneyTracker";
+import PNRManager from "@/components/pnr/PNRManager";
+import BookingHistory from "@/components/booking/BookingHistory";
 
 /* ─── Loading Indicator ───────────────────────────────────── */
 

@@ -258,27 +258,29 @@ export async function checkAIProviderHealth(): Promise<{
   configured: boolean;
   reachable: boolean;
   provider: string;
+  model?: string;
+  latency?: string;
+  healthy?: boolean;
 }> {
   try {
-    const response = await fetch(getApiUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [{ role: "user", content: "ping" }],
-        stream: false,
-      }),
+    const response = await fetch("/api/ai/health", {
       signal: AbortSignal.timeout(10_000),
     });
 
-    if (response.ok) return { configured: true, reachable: true, provider: "proxy" };
-    if (response.status === 400) {
-      // AI_NOT_CONFIGURED returns 400
-      const body = await response.json().catch(() => ({}));
-      const configured = body?.error?.code !== "AI_NOT_CONFIGURED";
-      return { configured, reachable: true, provider: "proxy" };
+    if (!response.ok) {
+      return { configured: false, reachable: false, provider: "unknown" };
     }
-    return { configured: true, reachable: false, provider: "proxy" };
+
+    const body = await response.json();
+    return {
+      configured: body?.data?.configured ?? false,
+      reachable: body?.data?.reachable ?? false,
+      provider: body?.data?.provider ?? "unknown",
+      model: body?.data?.model,
+      latency: body?.latency,
+      healthy: body?.data?.healthy ?? false,
+    };
   } catch {
-    return { configured: false, reachable: false, provider: "proxy" };
+    return { configured: false, reachable: false, provider: "unknown" };
   }
 }

@@ -4,7 +4,7 @@ import { useCallback } from "react";
 import { useUser, useAuth } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import { TrainFront, LogOut } from "lucide-react";
-import AIAssistantPanel from "@/features/chat/components/ChatPanel";
+import AIAssistantPanel from "@/components/chat/ChatPanel";
 import { BookingProvider } from "@/lib/booking-store";
 
 /* ─── Minimal Top Bar ─────────────────────────────────────── */
