@@ -277,10 +277,10 @@ export async function executeTool(
           toolName,
         };
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       success: false,
-      error: err?.message || `Tool ${toolName} execution failed`,
+      error: err instanceof Error ? err.message : `Tool ${toolName} execution failed`,
       toolCallId,
       toolName,
     };

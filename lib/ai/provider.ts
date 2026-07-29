@@ -90,12 +90,12 @@ export async function createCompletion(
       content: body?.data?.content || "",
       toolCalls: body?.data?.toolCalls || [],
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     clearTimeout(timeout);
     if (err instanceof AIProviderError) throw err;
-    if (err.name === "AbortError") throw new AITimeoutError();
+    if (err instanceof Error && err.name === "AbortError") throw new AITimeoutError();
     throw new AIProviderError(
-      err?.message || "AI request failed",
+      err instanceof Error ? err.message : "AI request failed",
       "AI_REQUEST_FAILED"
     );
   }
@@ -238,15 +238,15 @@ export async function createStreamingCompletion(
     }
 
     callbacks.onDone(fullContent, toolCalls);
-  } catch (err: any) {
+  } catch (err: unknown) {
     clearTimeout(timeout);
-    if (err.name === "AbortError") {
+    if (err instanceof Error && err.name === "AbortError") {
       callbacks.onError(new AITimeoutError());
     } else {
       callbacks.onError(
         err instanceof AIProviderError
           ? err
-          : new AIProviderError(err?.message || "Streaming failed")
+          : new AIProviderError(err instanceof Error ? err.message : "Streaming failed")
       );
     }
   }

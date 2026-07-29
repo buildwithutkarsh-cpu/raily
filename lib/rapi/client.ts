@@ -130,16 +130,18 @@ class RapiApiClient {
       }
 
       return (await response.json()) as RapiResponse<T>;
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timeout);
       if (err instanceof RapiError) throw err;
-      if (err.name === "AbortError") {
+      if (err instanceof Error && err.name === "AbortError") {
         throw new RapiTimeoutError(url);
       }
-      if (err.cause?.code === "ECONNREFUSED" || err.message?.includes("ECONNREFUSED")) {
+      const errorRecord = err as Record<string, unknown>;
+      const cause = errorRecord?.cause as Record<string, unknown> | undefined;
+      if (cause?.code === "ECONNREFUSED" || (typeof errorRecord?.message === "string" && errorRecord.message.includes("ECONNREFUSED"))) {
         throw new RapiUnreachableError(this.baseUrl);
       }
-      throw new RapiError(err?.message || "Rapi request failed");
+      throw new RapiError(err instanceof Error ? err.message : "Rapi request failed");
     }
   }
 }

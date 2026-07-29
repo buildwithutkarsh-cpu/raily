@@ -224,10 +224,10 @@ export async function POST(request: NextRequest) {
           for await (const chunk of streamProviderCompletion(config, validation.data)) {
             controller.enqueue(new TextEncoder().encode(chunk + "\n"));
           }
-        } catch (err: any) {
+        } catch (err: unknown) {
           controller.enqueue(
             new TextEncoder().encode(
-              JSON.stringify({ type: "error", code: "AI_STREAM_ERROR", message: err?.message || "Stream failed" }) + "\n"
+              JSON.stringify({ type: "error", code: "AI_STREAM_ERROR", message: err instanceof Error ? err.message : "Stream failed" }) + "\n"
             )
           );
         } finally {
@@ -258,10 +258,19 @@ export async function POST(request: NextRequest) {
         toolCalls: message?.tool_calls || [],
       },
     });
-  } catch (err: any) {
-    if (err?.code) {
-      return errorResponse(err.message, err.status || 500, err.code);
+  } catch (err: unknown) {
+    const errRecord = err as Record<string, unknown>;
+    if (errRecord?.code) {
+      return errorResponse(
+        typeof errRecord.message === "string" ? errRecord.message : "AI request failed",
+        typeof errRecord.status === "number" ? errRecord.status : 500,
+        String(errRecord.code)
+      );
     }
-    return errorResponse(err?.message || "AI request failed", 500, "AI_REQUEST_FAILED");
+    return errorResponse(
+      err instanceof Error ? err.message : "AI request failed",
+      500,
+      "AI_REQUEST_FAILED"
+    );
   }
 }
