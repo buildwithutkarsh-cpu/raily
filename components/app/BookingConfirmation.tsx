@@ -17,7 +17,7 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { useBooking } from "@/lib/booking-store";
+import { useBooking, formatDisplayDate } from "@/lib/booking-store";
 
 export default function BookingConfirmation() {
   const { state, resetBooking, setStep } = useBooking();
@@ -243,7 +243,7 @@ export default function BookingConfirmation() {
 PNR: ${pnr}
 Train: ${train?.name} (${train?.number})
 Route: ${state.query?.origin || "Delhi"} → ${state.query?.destination || "Jaipur"}
-Date: ${state.query?.date || "28 Jul 2026"}
+Date: ${state.query?.date ? formatDisplayDate(state.query.date) : "28 Jul 2026"}
 Time: ${train?.departure} → ${train?.arrival}
 Coach: B1 · Seat: 7 (Lower)
 Fare: ₹${train?.price || 1245}

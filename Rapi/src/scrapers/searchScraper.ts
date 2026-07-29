@@ -163,7 +163,8 @@ function parseHTMLTable(html: string): TrainSearchEntry[] {
 
 export async function searchTrains(
   from: string,
-  to: string
+  to: string,
+  date?: string
 ): Promise<ScrapeResult<TrainSearchResponse>> {
   // Validate station codes
   if (!/^[A-Za-z0-9]{2,10}$/.test(from) || !/^[A-Za-z0-9]{2,10}$/.test(to)) {
@@ -172,7 +173,9 @@ export async function searchTrains(
 
   const fromUpper = from.toUpperCase().trim();
   const toUpper = to.toUpperCase().trim();
-  const cacheKey = `trains:${fromUpper}:${toUpper}`;
+  const cacheKey = date
+    ? `trains:${fromUpper}:${toUpper}:${date}`
+    : `trains:${fromUpper}:${toUpper}`;
 
   return cache.getOrRefresh<TrainSearchResponse>(
     cacheKey,

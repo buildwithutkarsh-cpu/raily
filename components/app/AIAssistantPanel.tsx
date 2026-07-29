@@ -12,7 +12,8 @@ import {
   Check,
   ArrowRight,
 } from "lucide-react";
-import { useBooking, getSeatRecommendation as getSeatRec, type ExtractedQuery } from "@/lib/booking-store";
+import { useBooking, parseNaturalLanguageQuery, getSeatRecommendation as getSeatRec, formatDisplayDate } from "@/lib/booking-store";
+import type { ExtractedQuery } from "@/lib/booking-store";
 import type { Train as TrainType } from "@/lib/booking-store";
 
 interface Message {
@@ -76,100 +77,29 @@ export default function AIAssistantPanel({
     }
   }, [isOpen]);
 
-  /* ── Query Parsing ──────────────────────────────────────── */
-  const parseQuery = useCallback(
-    (text: string): { query: ExtractedQuery; response: string } => {
-      const lower = text.toLowerCase();
+  /* ── Build AI Response from Parsed Query ───────────────── */
+  const buildQueryResponse = useCallback((query: ExtractedQuery): string => {
+    if (!query.origin || !query.destination) {
+      return `I can help you find the perfect train — just tell me where you're going and when! Try something like "Delhi to Jaipur tomorrow".`;
+    }
 
-      // Extract origin & destination
-      const routePattern =
-        /(?:from\s+|book\s+)?(\w[\w\s]+?)\s*(?:to|→|->|for|–)\s*(\w[\w\s]+?)(?:\s+(?:on|tomorrow|today|next|this|coming|for))|(\w[\w\s]+?)\s*(?:to|→)\s*(\w[\w\s]+?)(?:\s|$)/i;
-      const routeMatch = text.match(routePattern);
+    const displayDate = formatDisplayDate(query.date);
+    const prefStr = query.preference ? ` (${query.preference})` : "";
+    const budgetStr = query.budget ? ` under ₹${query.budget}` : "";
 
-      let origin = "";
-      let destination = "";
-      if (routeMatch) {
-        origin = routeMatch[1]?.trim() || routeMatch[3]?.trim() || "";
-        destination = routeMatch[2]?.trim() || routeMatch[4]?.trim() || "";
-      }
+    let response = `I found trains from **${query.origin} → ${query.destination}** on ${displayDate}${prefStr}${budgetStr}. Let me search for the best options and organize them by what matters most.`;
 
-      // Extract budget
-      const budgetMatch = text.match(
-        /(?:under|below|less than|budget|max|within|₹|rs\.?\s*)\s*(\d{3,5})/i
-      );
-      const budget = budgetMatch ? parseInt(budgetMatch[1]) : undefined;
+    if (query.budget && query.budget <= 800) {
+      response += `\n\n⭐ **Budget Pick:** I'll prioritize the most affordable options within ₹${query.budget}.`;
+    } else if (query.preference?.includes("Lower")) {
+      response += `\n\n⭐ **Comfort Pick:** I'll find trains with lower berth availability for easy access.`;
+    } else {
+      response += `\n\n⭐ **Top Pick:** I'll recommend the best overall option balancing speed, comfort, and price.`;
+    }
 
-      // Extract preferences
-      let preference = "";
-      if (lower.includes("window")) preference = "Window seat";
-      else if (lower.includes("lower") || lower.includes("berth"))
-        preference = "Lower berth";
-      else if (lower.includes("upper")) preference = "Upper berth";
-      else if (lower.includes("aisle")) preference = "Aisle seat";
-      else if (lower.includes("sleeper")) preference = "Sleeper class";
-      else if (lower.includes("ac") || lower.includes("3a") || lower.includes("3ac"))
-        preference = "AC 3-tier";
-      else if (lower.includes("cc") || lower.includes("chair"))
-        preference = "Chair car";
+    return response;
+  }, []);
 
-      // Extract date
-      let date = "";
-      if (lower.includes("tomorrow")) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        date = tomorrow.toLocaleDateString("en-IN", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        });
-      } else if (lower.includes("today")) {
-        date = new Date().toLocaleDateString("en-IN", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        });
-      } else if (lower.includes("friday")) {
-        date = "This Friday";
-      } else if (lower.includes("monday")) {
-        date = "This Monday";
-      } else {
-        date = "Soon";
-      }
-
-      // Build response
-      let response = "";
-      if (origin && destination) {
-        const prefStr = preference ? ` (${preference})` : "";
-        const budgetStr = budget ? ` under ₹${budget}` : "";
-        response = `I found trains from **${origin} → ${destination}** on ${date}${prefStr}${budgetStr}. Let me search for the best options and organize them by what matters most.`;
-
-        if (budget && budget <= 800) {
-          response += `\n\n⭐ **Budget Pick:** I'll prioritize the most affordable options within ₹${budget}.`;
-        } else if (preference?.includes("Lower")) {
-          response += `\n\n⭐ **Comfort Pick:** I'll find trains with lower berth availability for easy access.`;
-        } else {
-          response += `\n\n⭐ **Top Pick:** I'll recommend the best overall option balancing speed, comfort, and price.`;
-        }
-      } else {
-        response = `I can help you find the perfect train — just tell me where you're going and when! Try something like "Delhi to Jaipur tomorrow".`;
-      }
-
-      return {
-        query: {
-          origin,
-          destination,
-          date,
-          budget,
-          preference,
-          raw: text,
-        },
-        response,
-      };
-    },
-    []
-  );
 
   /* ── Handle Message Submit ─────────────────────────────── */
   const handleSubmit = useCallback(
@@ -228,9 +158,10 @@ export default function AIAssistantPanel({
       }
 
       if (isBookingQuery) {
-        const { query, response } = parseQuery(msgText);
+        const query = parseNaturalLanguageQuery(msgText);
         setQuery(query);
         setStep("searching");
+        const response = buildQueryResponse(query);
         // Show a brief thinking state, then await the real API call
         const aiMsg: Message = {
           id: (Date.now() + 1).toString(),
@@ -265,7 +196,7 @@ export default function AIAssistantPanel({
       setMessages((prev) => [...prev, aiMsg]);
       setIsTyping(false);
     },
-    [input, isTyping, parseQuery, setQuery, fetchTrains, setStep]
+    [input, isTyping, buildQueryResponse, setQuery, fetchTrains, setStep]
   );
 
   /* ── Follow-up: select train ──────────────────────────── */

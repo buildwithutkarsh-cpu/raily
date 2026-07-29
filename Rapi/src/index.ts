@@ -75,7 +75,7 @@ app.get("/", (_req, res) => {
     version: "1.0.0",
     endpoints: {
       pnr: "GET /api/v1/pnr/:pnr",
-      trainSearch: "GET /api/v1/trains/search?from=NDLS&to=BCT",
+      trainSearch: "GET /api/v1/trains/search?from=NDLS&to=BCT&date=29-07-2026",
       trainLive: "GET /api/v1/trains/:trainNumber/live?date=DD-MM-YYYY",
       trainInfo: "GET /api/v1/trains/:trainNumber/info",
       trainAvailability: "GET /api/v1/trains/:trainNumber/availability?from=NDLS&to=BCT&date=DD-MM-YYYY",
@@ -123,7 +123,7 @@ if (process.env.NODE_ENV !== 'test') {
 ║                                              ║
 ║  Endpoints:                                  ║
 ║    PNR:     /api/v1/pnr/:pnr                 ║
-║    Search:  /api/v1/trains/search?from=&to=   ║
+║    Search:  /api/v1/trains/search?from=&to=&date= ║
 ║    Live:    /api/v1/trains/:no/live          ║
 ║    Info:    /api/v1/trains/:no/info          ║
 ║    Avail:   /api/v1/trains/:no/availability  ║

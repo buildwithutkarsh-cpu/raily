@@ -11,12 +11,17 @@ import { getAvailability, getFare } from "../scrapers/availabilityScraper";
 const router = Router();
 
 /**
- * GET /api/v1/trains/search?from=NDLS&to=BCT
+ * GET /api/v1/trains/search?from=NDLS&to=BCT&date=29-07-2026
  * Search for trains between two stations.
+ * 
+ * The date parameter is optional and passed along for cache key
+ * granularity. The underlying scraper returns all trains on a
+ * route; date-based running-day filtering is done client-side.
  */
 router.get("/search", async (req: Request, res: Response) => {
   const from = req.query.from as string | undefined;
   const to = req.query.to as string | undefined;
+  const date = req.query.date as string | undefined;
 
   if (!from || !to) {
     return res.status(400).json({
@@ -25,7 +30,7 @@ router.get("/search", async (req: Request, res: Response) => {
     });
   }
 
-  const result = await searchTrains(from, to);
+  const result = await searchTrains(from, to, date);
   return res.status(result.success ? 200 : 400).json(result);
 });
 

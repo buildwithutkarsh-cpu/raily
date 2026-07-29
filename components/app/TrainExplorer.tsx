@@ -14,7 +14,7 @@ import {
   Info,
   ChevronRight,
 } from "lucide-react";
-import { useBooking } from "@/lib/booking-store";
+import { useBooking, formatDisplayDate } from "@/lib/booking-store";
 import { Loader2 } from "lucide-react";
 
 /* ── Skeleton ──────────────────────────────────────────────── */
@@ -143,7 +143,7 @@ export default function TrainExplorer() {
               : "Train Recommendations"}
           </h2>
           <p className="text-[13px] text-[var(--muted)] mt-1">
-            {query?.date || "Today"} · {trains.length} trains found ·{" "}
+            {query?.date ? formatDisplayDate(query.date) : "Today"} · {trains.length} trains found ·{" "}
             <span className="text-[var(--railway-red)] font-semibold">
               ₹{Math.min(...trains.map((t) => t.price))} – ₹
               {Math.max(...trains.map((t) => t.price))}

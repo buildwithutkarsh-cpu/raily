@@ -201,8 +201,58 @@ export function getStoredRecentBookings(): RecentBooking[] {
 /* ─── Natural Language Query Parser ───────────────────────── */
 
 /**
+ * Get the next occurrence of a weekday name (e.g. "friday") as a YYYY-MM-DD string.
+ * Returns today if the weekday matches today, or the next occurrence otherwise.
+ */
+function getNextWeekday(dayName: string): string {
+  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const targetIndex = days.indexOf(dayName.toLowerCase());
+  if (targetIndex === -1) return toDateString(new Date());
+
+  const now = new Date();
+  const currentDay = now.getDay(); // 0=Sun, 1=Mon...
+  let diff = targetIndex - currentDay;
+  if (diff < 0) diff += 7; // Next week if the day has already passed
+
+  const next = new Date(now);
+  next.setDate(now.getDate() + diff);
+  return toDateString(next);
+}
+
+/** Convert a Date object to YYYY-MM-DD string */
+function toDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Get a human-readable display date from a YYYY-MM-DD string.
+ * Returns "Today", "Tomorrow", or a formatted date like "Fri, 28 Jul 2026".
+ */
+export function formatDisplayDate(dateStr: string): string {
+  if (!dateStr) return "";
+
+  const today = toDateString(new Date());
+  if (dateStr === today) return "Today";
+
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (dateStr === toDateString(tomorrow)) return "Tomorrow";
+
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/**
  * Parse a natural language query string (e.g. "Book Delhi to Jaipur tomorrow, lower berth, under ₹800")
- * into a structured ExtractedQuery object.
+ * into a structured ExtractedQuery object with a YYYY-MM-DD date.
  */
 export function parseNaturalLanguageQuery(text: string): ExtractedQuery {
   const lower = text.toLowerCase();
@@ -241,34 +291,30 @@ export function parseNaturalLanguageQuery(text: string): ExtractedQuery {
   else if (lower.includes("cc") || lower.includes("chair"))
     preference = "Chair car";
 
-  // Extract date
+  // Extract date — always returns YYYY-MM-DD format
   let date = "";
   if (lower.includes("tomorrow")) {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    date = tomorrow.toLocaleDateString("en-IN", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-  } else if (lower.includes("today")) {
-    date = new Date().toLocaleDateString("en-IN", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    date = toDateString(tomorrow);
+  } else if (lower.includes("today") || lower.includes("now")) {
+    date = toDateString(new Date());
   } else if (lower.includes("friday")) {
-    date = "This Friday";
+    date = getNextWeekday("friday");
   } else if (lower.includes("monday")) {
-    date = "This Monday";
+    date = getNextWeekday("monday");
   } else if (lower.includes("saturday")) {
-    date = "This Saturday";
+    date = getNextWeekday("saturday");
   } else if (lower.includes("sunday")) {
-    date = "This Sunday";
+    date = getNextWeekday("sunday");
+  } else if (lower.includes("tuesday")) {
+    date = getNextWeekday("tuesday");
+  } else if (lower.includes("wednesday")) {
+    date = getNextWeekday("wednesday");
+  } else if (lower.includes("thursday")) {
+    date = getNextWeekday("thursday");
   } else {
-    date = "Today";
+    date = toDateString(new Date());
   }
 
   return {

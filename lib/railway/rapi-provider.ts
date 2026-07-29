@@ -127,9 +127,12 @@ export class RapiProvider implements RailwayProvider {
   /* GET /api/v1/trains/search?from=NDLS&to=BCT                 */
 
   async searchTrains(params: TrainSearchParams): Promise<TrainSearchResult> {
+    const date = params.date ? this.toRapiDate(params.date) : "";
+    const url = `/api/v1/trains/search?from=${params.from}&to=${params.to}${date ? `&date=${date}` : ""}`;
     const res = await this.get<{
       from: string;
       to: string;
+      date?: string;
       total: number;
       trains: Array<{
         train_no: string;
@@ -143,7 +146,7 @@ export class RapiProvider implements RailwayProvider {
         travel_time: string;
         running_days: string;
       }>;
-    }>(`/api/v1/trains/search?from=${params.from}&to=${params.to}`);
+    }>(url);
 
     if (!res.success || !res.data) {
       throw new RailwayAPIError(
