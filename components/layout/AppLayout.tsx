@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback } from "react";
-import { useUser } from "@clerk/nextjs";
-import { TrainFront } from "lucide-react";
+import { useUser, useAuth } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
+import { TrainFront, LogOut } from "lucide-react";
 import AIAssistantPanel from "@/features/chat/components/ChatPanel";
 import { BookingProvider } from "@/lib/booking-store";
 
@@ -10,9 +11,16 @@ import { BookingProvider } from "@/lib/booking-store";
 
 function TopBar() {
   const { user, isLoaded } = useUser();
+  const { signOut } = useAuth();
+  const router = useRouter();
 
   const displayName =
     user?.firstName || user?.username || (isLoaded ? "Traveler" : "...");
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/");
+  };
 
   return (
     <header className="h-14 border-b border-[var(--border)] bg-[var(--bg)] flex items-center justify-between px-6 flex-shrink-0">
@@ -26,12 +34,19 @@ function TopBar() {
         </span>
       </div>
 
-      {/* Profile */}
+      {/* Profile & Sign Out */}
       <div className="flex items-center gap-2.5">
         <span className="text-xs text-[var(--muted)]">{displayName}</span>
         <div className="w-7 h-7 flex items-center justify-center bg-[var(--fg)] text-[var(--bg)] text-[10px] font-semibold">
           {displayName.charAt(0).toUpperCase()}
         </div>
+        <button
+          onClick={handleSignOut}
+          className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-[var(--muted)] hover:text-[var(--fg)] transition-colors"
+          title="Sign out"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+        </button>
       </div>
     </header>
   );
