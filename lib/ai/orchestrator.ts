@@ -32,7 +32,8 @@ export interface OrchestrationCallbacks {
 async function executeToolCallsAndRespond(
   toolCalls: AIToolCall[],
   messages: AIMessage[],
-  callbacks: OrchestrationCallbacks
+  callbacks: OrchestrationCallbacks,
+  initialContent = ""
 ): Promise<{ content: string; component: string | null }> {
   const memory = getConversationMemory();
 
@@ -55,9 +56,10 @@ async function executeToolCallsAndRespond(
   );
 
   // Add assistant message with tool calls to the messages array
+  // Include the initial reasoning text so the LLM sees its own thoughts
   messages.push({
     role: "assistant",
-    content: "",
+    content: initialContent,
     tool_calls: toolCalls,
   });
 
@@ -77,10 +79,13 @@ async function executeToolCallsAndRespond(
   const parsed = parseAIResponse(secondResponse.content);
   const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
 
+  // Include initial reasoning in the final content
+  const combinedContent = initialContent ? `${initialContent}\n\n${parsed.text}` : parsed.text;
+
   // Store the final response
   memory.addAssistantEntry(parsed.text);
 
-  // Stream the text
+  // Stream the response text (not the initial reasoning — it was already streamed)
   callbacks.onText(parsed.text);
 
   // Trigger UI component if needed
@@ -88,9 +93,9 @@ async function executeToolCallsAndRespond(
     callbacks.onComponent(component as AIComponentType);
   }
 
-  callbacks.onDone(parsed.text, component);
+  callbacks.onDone(combinedContent, component);
 
-  return { content: parsed.text, component };
+  return { content: combinedContent, component };
 }
 
 /* ─── Main Orchestration ─────────────────────────────────── */
@@ -121,8 +126,9 @@ export async function processWithAI(
       },
       onDone: async (fullContent: string, toolCalls: AIToolCall[]) => {
         // If there are tool calls, execute them and do a second pass
+        // Pass fullContent (initial LLM reasoning) so it's preserved in context
         if (toolCalls.length > 0) {
-          await executeToolCallsAndRespond(toolCalls, messages, callbacks);
+          await executeToolCallsAndRespond(toolCalls, messages, callbacks, fullContent);
           return;
         }
 
