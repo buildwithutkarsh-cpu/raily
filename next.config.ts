@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Vercel handles output mode automatically for serverless deployment
 
+  // Mark pdfkit as external so its font metric .afm files are not
+  // stripped during bundling — required for serverless deployments
+  serverExternalPackages: ["pdfkit"],
+
   // Security headers
   async headers() {
     return [
