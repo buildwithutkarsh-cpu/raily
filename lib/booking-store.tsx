@@ -115,31 +115,6 @@ export interface BookingState {
   aiError: string | null;
 }
 
-/* ─── City-to-Station Code Mapping ──────────────────────────── */
-
-const CITY_TO_CODE: Record<string, string> = {
-  delhi: "NDLS", "new delhi": "NDLS",
-  mumbai: "BCT", bombay: "BCT",
-  jaipur: "JP",
-  chennai: "MAS", madras: "MAS",
-  bangalore: "SBC", bengaluru: "SBC",
-  howrah: "HWH", kolkata: "HWH", calcutta: "HWH",
-  chandigarh: "CDG", lucknow: "LKO", patna: "PNBE",
-  ahmedabad: "ADI", pune: "PUNE", bhopal: "BPL",
-  amritsar: "ASR", nagpur: "NGP",
-  secunderabad: "SC", hyderabad: "SC",
-  guwahati: "GHY", varanasi: "BSB",
-  agra: "AGC", mathura: "MTJ", ajmer: "AII",
-  udaipur: "UDZ", jodhpur: "JU",
-  indore: "INDB", vadodara: "BRC", surat: "ST",
-};
-
-export function resolveStationCode(name: string): string {
-  const clean = name.trim().toLowerCase();
-  if (/^[A-Z]{2,5}$/i.test(clean)) return clean.toUpperCase();
-  return CITY_TO_CODE[clean] || name.substring(0, 4).toUpperCase();
-}
-
 /* ─── PNR Generator (simulated booking) ────────────────────── */
 
 const PNR_FIRST_DIGITS = [4, 6, 8];
@@ -231,24 +206,6 @@ const defaultState: BookingState = {
   messages: [createWelcomeMessage()], rapiConnected: false, rapiError: null,
   aiConfigured: false, aiError: null,
 };
-
-/* ─── Train Badge Logic ────────────────────────────────────── */
-
-const SUPERFAST_TYPES = new Set(["RAJDHANI", "SHATABDI", "DURONTO", "SUPERFAST", "GARIB_RATH", "VANDEBHARAT"]);
-
-const TRAIN_TYPE_DEFAULTS: Record<string, { price: number; classType: string; available: number }> = {
-  RAJDHANI: { price: 1940, classType: "3A", available: 48 },
-  SHATABDI: { price: 890, classType: "CC", available: 64 },
-  DURONTO: { price: 2060, classType: "3A", available: 36 },
-  GARIB_RATH: { price: 740, classType: "3A", available: 80 },
-  SUPERFAST: { price: 720, classType: "SL", available: 120 },
-  EXPRESS: { price: 380, classType: "SL", available: 180 },
-  PASSENGER: { price: 160, classType: "2S", available: 240 },
-};
-
-function getDefaultForType(type: string) {
-  return TRAIN_TYPE_DEFAULTS[type] || TRAIN_TYPE_DEFAULTS["EXPRESS"];
-}
 
 export function getSeatRecommendation(): SeatRecommendation {
   return {
@@ -374,8 +331,9 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       const connected = result.success;
       setState((prev) => ({ ...prev, rapiConnected: connected, rapiError: connected ? null : "RAPI server unreachable" }));
       return connected;
-    } catch (err: any) {
-      setState((prev) => ({ ...prev, rapiConnected: false, rapiError: err?.message || "RAPI server unreachable" }));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "RAPI server unreachable";
+      setState((prev) => ({ ...prev, rapiConnected: false, rapiError: message }));
       return false;
     }
   }, []);
