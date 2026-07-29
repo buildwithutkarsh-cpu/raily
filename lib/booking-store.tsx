@@ -295,38 +295,42 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   const setSelectedSeat = useCallback((seatId: string | null) => setState((prev) => ({ ...prev, selectedSeat: seatId })), []);
   const setSeatRecommendation = useCallback((rec: SeatRecommendation | null) => setState((prev) => ({ ...prev, seatRecommendation: rec })), []);
 
+  // Ref to track the latest state synchronously for use in callbacks
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const confirmBooking = useCallback(async (): Promise<string> => {
-    // We need to read current state — use a ref pattern
-    return new Promise((resolve) => {
-      setState((prev) => {
-        const train = prev.selectedTrain;
-        const coach = prev.selectedCoach;
-        const seat = prev.selectedSeat;
-        const query = prev.query;
-        const pnr = generatePNR(train?.number || "00000", coach || "B1", seat);
-        if (train && query) {
-          addRecentBooking({
-            pnr,
-            trainName: train.name,
-            trainNumber: train.number,
-            from: query.origin.toUpperCase() || "—",
-            to: query.destination.toUpperCase() || "—",
-            date: query.date || new Date().toLocaleDateString(),
-            time: `${train.departure} → ${train.arrival}`,
-            status: "CONFIRMED" as const,
-            timestamp: new Date().toISOString(),
-          });
-        }
-        return { ...prev, isProcessing: false, bookingConfirmed: true, step: "confirmed" as const, pnrNumber: pnr };
+    const currentState = stateRef.current;
+    const train = currentState.selectedTrain;
+    const coach = currentState.selectedCoach;
+    const seat = currentState.selectedSeat;
+    const query = currentState.query;
+    const pnr = generatePNR(train?.number || "00000", coach || "B1", seat);
+
+    if (train && query) {
+      addRecentBooking({
+        pnr,
+        trainName: train.name,
+        trainNumber: train.number,
+        from: query.origin.toUpperCase() || "—",
+        to: query.destination.toUpperCase() || "—",
+        date: query.date || new Date().toLocaleDateString(),
+        time: `${train.departure} → ${train.arrival}`,
+        status: "CONFIRMED" as const,
+        timestamp: new Date().toISOString(),
       });
-      // Wait for state update then resolve with PNR from state
-      setTimeout(() => {
-        setState((prev) => {
-          resolve(prev.pnrNumber || "");
-          return prev;
-        });
-      }, 50);
-    });
+    }
+
+    // Update state synchronously
+    setState((prev) => ({
+      ...prev,
+      isProcessing: false,
+      bookingConfirmed: true,
+      step: "confirmed" as const,
+      pnrNumber: pnr,
+    }));
+
+    return pnr;
   }, []);
 
   const resetBooking = useCallback(() => setState({ ...defaultState, messages: [createWelcomeMessage()] }), []);

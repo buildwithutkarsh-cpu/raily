@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBooking } from "@/lib/booking-store";
 import type { Message, ChatComponentType } from "@/lib/booking-store";
-import { ArrowUp } from "lucide-react";
+import DOMPurify from "dompurify";
 import TrainExplorer from "@/features/trains/components/TrainExplorer";
 import CoachVisualizer from "@/features/coach/components/CoachVisualizer";
 import BookingConfirmation from "@/features/booking/components/BookingConfirmation";
@@ -55,14 +55,14 @@ function WelcomeMessage({
           "Book Delhi to Jaipur tomorrow",
           "Check PNR status",
           "Track my train",
-        ].map((suggestion) => (
-          <button
-            key={suggestion}
-            onClick={() => onSuggestionClick?.(suggestion)}
-            className="px-3 py-1.5 text-xs text-[var(--muted)] border border-[var(--border)] hover:border-[var(--fg)] hover:text-[var(--fg)] transition-colors"
-          >
-            {suggestion}
-          </button>
+        ].map((suggestion) => (              <button
+                key={suggestion}
+                type="button"
+                onClick={() => onSuggestionClick?.(suggestion)}
+                className="px-3 py-1.5 text-xs text-[var(--muted)] border border-[var(--border)] hover:border-[var(--fg)] hover:text-[var(--fg)] transition-colors"
+              >
+                {suggestion}
+              </button>
         ))}
       </div>
 
@@ -136,9 +136,20 @@ function MessageContent({
     }
   };
 
-  // Parse inline markdown-like bold markers
+  // Sanitize AI-generated content to prevent XSS/prompt injection
+  const sanitize = (text: string): string => {
+    if (typeof window === "undefined") return text;
+    // Allow basic HTML formatting (bold, line breaks) but strip dangerous tags
+    return DOMPurify.sanitize(text, {
+      ALLOWED_TAGS: ["strong", "b", "em", "i", "br", "p"],
+      ALLOWED_ATTR: [],
+    });
+  };
+
+  // Parse inline markdown-like bold markers (after sanitization)
   const formatText = (text: string) => {
-    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    const safeText = sanitize(text);
+    const parts = safeText.split(/(\*\*[^*]+\*\*)/g);
     return parts.map((part, i) => {
       if (part.startsWith("**") && part.endsWith("**")) {
         return (
@@ -281,11 +292,15 @@ function ChatInput({
             className="flex-1 bg-transparent px-4 py-3 text-sm outline-none placeholder:text-[var(--muted)] disabled:opacity-50"
           />
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={!input.trim() || disabled}
             className="w-9 h-9 flex items-center justify-center mr-1 bg-[var(--fg)] text-[var(--bg)] disabled:bg-[var(--border)] disabled:text-[var(--muted)] transition-colors"
+            aria-label="Send message"
           >
-            <ArrowUp className="h-4 w-4" />
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8 3L8 13M8 3L4 7M8 3L12 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
           </button>
         </div>
       </div>
@@ -301,18 +316,35 @@ export default function AIAssistantPanel() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [state.messages]);
+  // Scroll-aware auto-scroll
+  const [isAtBottom, setIsAtBottom] = useState(true);
 
-  // Re-scroll when streaming content updates
+  const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const threshold = 100;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+    setIsAtBottom(atBottom);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  // Auto-scroll to bottom on new messages if user is at the bottom
+  useEffect(() => {
+    if (isAtBottom) {
+      scrollToBottom();
+    }
+  }, [state.messages.length, isAtBottom, scrollToBottom]);
+
+  // Re-scroll when streaming content updates (only if user is at bottom)
   useEffect(() => {
     const lastMsg = state.messages[state.messages.length - 1];
-    if (lastMsg?.streaming) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (lastMsg?.streaming && isAtBottom) {
+      scrollToBottom();
     }
-  }, [state.messages]);
+  }, [state.messages, isAtBottom, scrollToBottom]);
 
   const handleSend = useCallback(
     async (text: string) => {
@@ -338,6 +370,7 @@ export default function AIAssistantPanel() {
       {/* Messages area */}
       <div
         ref={containerRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-y-auto scroll-smooth"
       >
         <div className="max-w-[var(--chat-max-width)] mx-auto px-6 py-8 space-y-6">
