@@ -353,6 +353,13 @@ function AppLayoutInner({
   const [activeSection, setActiveSection] = useState<AppSection>(defaultSection ?? "search");
   const [unreadNotifications] = useState(3);
 
+  useEffect(() => {
+    if (!sessionStorage.getItem("app_reloaded")) {
+      sessionStorage.setItem("app_reloaded", "true");
+      window.location.reload();
+    }
+  }, []);
+
   const handleToggleCollapse = useCallback(() => {
     setSidebarCollapsed((prev) => !prev);
   }, []);
