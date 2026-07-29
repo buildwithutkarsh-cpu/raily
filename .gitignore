@@ -49,3 +49,5 @@ next-env.d.ts
 
 # guides
 GUIDE_*.md
+Rapi/eng.traineddata
+Rapi/dist/
