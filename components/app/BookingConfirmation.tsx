@@ -20,7 +20,7 @@ import {
 import { useBooking } from "@/lib/booking-store";
 
 export default function BookingConfirmation() {
-  const { state, resetBooking } = useBooking();
+  const { state, resetBooking, setStep } = useBooking();
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [email, setEmail] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -337,8 +337,7 @@ Thank you for using RAILY.</pre>`
       >
         <button
           onClick={() => {
-            // Navigate to PNR
-            window.location.hash = "pnr";
+            setStep("pnr");
           }}
           className="flex items-center justify-center gap-3 p-5 border-2 border-[var(--fg)] hover:bg-[var(--fg)]/5 transition-colors text-left"
         >
@@ -355,8 +354,7 @@ Thank you for using RAILY.</pre>`
         </button>
         <button
           onClick={() => {
-            // Navigate to journey tracker
-            window.location.hash = "journey";
+            setStep("journey");
           }}
           className="flex items-center justify-center gap-3 p-5 border-2 border-[var(--fg)] hover:bg-[var(--fg)]/5 transition-colors text-left"
         >
@@ -433,6 +431,7 @@ Thank you for using RAILY.</pre>`
                 <button
                   onClick={() => setShowEmailModal(false)}
                   className="w-8 h-8 flex items-center justify-center hover:bg-[var(--fg)]/5 transition-colors"
+                  aria-label="Close email modal"
                 >
                   <X className="h-4 w-4" />
                 </button>

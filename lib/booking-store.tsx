@@ -198,6 +198,121 @@ export function getStoredRecentBookings(): RecentBooking[] {
   return getRecentBookings();
 }
 
+/* ─── Natural Language Query Parser ───────────────────────── */
+
+/**
+ * Parse a natural language query string (e.g. "Book Delhi to Jaipur tomorrow, lower berth, under ₹800")
+ * into a structured ExtractedQuery object.
+ */
+export function parseNaturalLanguageQuery(text: string): ExtractedQuery {
+  const lower = text.toLowerCase();
+
+  // Extract origin & destination
+  // Pattern: "from X to Y", "book X to Y", "X to Y", "X → Y"
+  const routePattern =
+    /(?:from\s+|book\s+)?(\w[\w\s]*?)\s*(?:to|→|->|for|–|for\s)(\w[\w\s]*?)(?:\s+(?:on|tomorrow|today|next|this|coming|for)|$)/i;
+  const routeMatch = text.match(routePattern);
+
+  let origin = "";
+  let destination = "";
+  if (routeMatch) {
+    origin = routeMatch[1]?.trim() || "";
+    destination = routeMatch[2]?.trim() || "";
+    // Trim trailing words like "on", "this", "next" from destination
+    destination = destination.replace(/\s+(on|this|next|coming|for|at|in)\s*$/i, "").trim();
+  }
+
+  // Extract budget
+  const budgetMatch = text.match(
+    /(?:under|below|less than|budget|max|within|₹|rs\.?\s*)\s*(\d{3,5})/i
+  );
+  const budget = budgetMatch ? parseInt(budgetMatch[1]) : undefined;
+
+  // Extract preferences
+  let preference = "";
+  if (lower.includes("window")) preference = "Window seat";
+  else if (lower.includes("lower") || lower.includes("berth"))
+    preference = "Lower berth";
+  else if (lower.includes("upper")) preference = "Upper berth";
+  else if (lower.includes("aisle")) preference = "Aisle seat";
+  else if (lower.includes("sleeper")) preference = "Sleeper class";
+  else if (lower.includes("ac") || lower.includes("3a") || lower.includes("3ac"))
+    preference = "AC 3-tier";
+  else if (lower.includes("cc") || lower.includes("chair"))
+    preference = "Chair car";
+
+  // Extract date
+  let date = "";
+  if (lower.includes("tomorrow")) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    date = tomorrow.toLocaleDateString("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } else if (lower.includes("today")) {
+    date = new Date().toLocaleDateString("en-IN", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } else if (lower.includes("friday")) {
+    date = "This Friday";
+  } else if (lower.includes("monday")) {
+    date = "This Monday";
+  } else if (lower.includes("saturday")) {
+    date = "This Saturday";
+  } else if (lower.includes("sunday")) {
+    date = "This Sunday";
+  } else {
+    date = "Today";
+  }
+
+  return {
+    origin,
+    destination,
+    date,
+    budget,
+    preference,
+    raw: text,
+  };
+}
+
+export function isTrainSearchQuery(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("book") ||
+    lower.includes("train") ||
+    lower.includes("ticket") ||
+    lower.includes("journey") ||
+    lower.includes("going") ||
+    lower.includes("travel") ||
+    lower.includes("route") ||
+    lower.includes("delhi") ||
+    lower.includes("mumbai") ||
+    lower.includes("jaipur") ||
+    lower.includes("bangalore") ||
+    lower.includes("chennai") ||
+    lower.includes("pune") ||
+    lower.includes("kolkata") ||
+    lower.includes("agra") ||
+    // Any "X to Y" pattern is likely a route query
+    /\w+\s+(?:to|→)\s+\w+/i.test(text)
+  );
+}
+
+export function isPNRQuery(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    !!text.match(/\b\d{10}\b/) ||
+    lower.includes("pnr") ||
+    (lower.includes("check") && lower.includes("status"))
+  );
+}
+
 /* ─── Default State ────────────────────────────────────────── */
 
 const defaultState: BookingState = {

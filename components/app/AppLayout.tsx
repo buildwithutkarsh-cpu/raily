@@ -14,7 +14,7 @@ import BookingHistory from "./BookingHistory";
 import NotificationsPanel from "./NotificationsPanel";
 import TravelPlanner from "./TravelPlanner";
 import BookingConfirmation from "./BookingConfirmation";
-import { BookingProvider, useBooking, getStoredRecentBookings } from "@/lib/booking-store";
+import { BookingProvider, useBooking, getStoredRecentBookings, parseNaturalLanguageQuery, isTrainSearchQuery, isPNRQuery } from "@/lib/booking-store";
 import {
   TrainFront,
   ArrowRight,
@@ -353,13 +353,6 @@ function AppLayoutInner({
   const [activeSection, setActiveSection] = useState<AppSection>(defaultSection ?? "search");
   const [unreadNotifications] = useState(3);
 
-  useEffect(() => {
-    if (!sessionStorage.getItem("app_reloaded")) {
-      sessionStorage.setItem("app_reloaded", "true");
-      window.location.reload();
-    }
-  }, []);
-
   const handleToggleCollapse = useCallback(() => {
     setSidebarCollapsed((prev) => !prev);
   }, []);
@@ -368,14 +361,46 @@ function AppLayoutInner({
     setAssistantOpen((prev) => !prev);
   }, []);
 
-  const { state } = useBooking();
+  const { state, setQuery, fetchTrains, setStep } = useBooking();
 
-  // Auto-switch to search section when booking starts
-  useEffect(() => {
-    if (state.step !== "idle" && activeSection !== "search") {
-      setActiveSection("search" as AppSection);
+  // Handle search from TopBar
+  const handleTopBarSearch = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    if (isPNRQuery(trimmed)) {
+      setStep("pnr");
+      setActiveSection("pnr");
+      return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync of booking step with section
+
+    if (isTrainSearchQuery(trimmed)) {
+      const parsed = parseNaturalLanguageQuery(trimmed);
+      if (parsed.origin && parsed.destination) {
+        setQuery(parsed);
+        setActiveSection("search");
+        fetchTrains(parsed);
+      } else {
+        // Partial query — still set it so the user sees it in the AI panel
+        setQuery(parsed);
+        setActiveSection("search");
+      }
+    } else {
+      // Generic search — switch to search/trains section
+      setActiveSection("trains");
+    }
+  }, [setQuery, fetchTrains, setStep]);
+
+  // Auto-switch section based on booking step
+  useEffect(() => {
+    if (state.step === "pnr") {
+      setActiveSection("pnr");
+    } else if (state.step === "journey") {
+      setActiveSection("journey");
+    } else if (state.step !== "idle") {
+      setActiveSection("search");
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional sync
   }, [state.step]);
 
   return (
@@ -400,6 +425,7 @@ function AppLayoutInner({
           onToggleAssistant={handleToggleAssistant}
           assistantOpen={assistantOpen}
           unreadNotifications={unreadNotifications}
+          onSearch={handleTopBarSearch}
         />
 
         <div className="flex flex-1 min-h-0">
