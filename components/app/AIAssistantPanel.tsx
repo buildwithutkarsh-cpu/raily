@@ -366,6 +366,7 @@ export default function AIAssistantPanel({
         <button
           onClick={onClose}
           className="w-8 h-8 flex items-center justify-center hover:bg-[var(--fg)]/5 transition-colors"
+          aria-label="Close AI assistant"
         >
           <X className="h-4 w-4" />
         </button>
