@@ -41,9 +41,9 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
         properties: {
           from: { type: "string", description: "Source station code (e.g. 'NDLS', 'BCT', 'JP')" },
           to: { type: "string", description: "Destination station code (e.g. 'NDLS', 'BCT', 'JP')" },
-          date: { type: "string", description: "Date of journey in YYYY-MM-DD format", default: "today" },
+          date: { type: "string", description: "Date of journey in YYYY-MM-DD format (use today's date if not specified)" },
         },
-        required: ["from", "to"],
+        required: ["from", "to", "date"],
         additionalProperties: false,
       },
     },
@@ -74,9 +74,9 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
         type: "object",
         properties: {
           trainNumber: { type: "string", description: "5-digit train number (e.g. '12951')" },
-          date: { type: "string", description: "Date in YYYY-MM-DD format (optional, defaults to today)", default: "" },
+          date: { type: "string", description: "Date in YYYY-MM-DD format (use today's date if not specified)" },
         },
-        required: ["trainNumber"],
+        required: ["trainNumber", "date"],
         additionalProperties: false,
       },
     },

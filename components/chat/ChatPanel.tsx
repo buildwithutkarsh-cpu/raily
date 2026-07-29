@@ -83,8 +83,17 @@ function WelcomeMessage({
 /* ─── Animated Streaming Text ──────────────────────────────── */
 
 function StreamingText({ content }: { content: string }) {
+  // Sanitize streaming content to prevent XSS/prompt injection
+  const safeContent =
+    typeof window !== "undefined"
+      ? DOMPurify.sanitize(content, {
+          ALLOWED_TAGS: ["strong", "b", "em", "i", "br", "p"],
+          ALLOWED_ATTR: [],
+        })
+      : content;
+
   // Split on tool call indicators (italics markers)
-  const parts = content.split(/(_\→ .*?\.\.\._)/g);
+  const parts = safeContent.split(/(_\→ .*?\.\.\._)/g);
 
   return (
     <div className="text-sm leading-relaxed whitespace-pre-wrap">
