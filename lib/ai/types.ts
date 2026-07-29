@@ -62,7 +62,7 @@ export interface AIToolDefinition {
     parameters: {
       type: "object";
       properties: Record<string, unknown>;
-      required: string[];
+      required?: string[];
       additionalProperties: boolean;
     };
   };

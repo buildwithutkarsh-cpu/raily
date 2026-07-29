@@ -144,7 +144,6 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
       parameters: {
         type: "object",
         properties: {},
-        required: [],
         additionalProperties: false,
       },
     },

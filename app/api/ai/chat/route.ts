@@ -71,6 +71,53 @@ function validateRequest(body: unknown): { valid: true; data: ChatRequest } | { 
   return { valid: true, data: body as ChatRequest };
 }
 
+/* ─── Tool Schema Normalization ─────────────────────────── */
+
+function sanitizeToolDefinitions(tools: Array<Record<string, unknown>> | undefined) {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return undefined;
+  }
+
+  return tools.map((tool) => {
+    if (!tool || typeof tool !== "object") {
+      return tool;
+    }
+
+    const toolRecord = tool as Record<string, unknown>;
+    const functionDefinition = toolRecord.function;
+
+    if (functionDefinition && typeof functionDefinition === "object") {
+      const functionRecord = functionDefinition as Record<string, unknown>;
+      const parameters = functionRecord.parameters;
+
+      if (parameters && typeof parameters === "object") {
+        const schema = parameters as Record<string, unknown>;
+
+        if (!schema.type || typeof schema.type !== "string") {
+          schema.type = "object";
+        }
+
+        const properties = schema.properties;
+        if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+          schema.properties = {};
+        }
+
+        if (schema.required && Array.isArray(schema.required) && schema.required.length === 0) {
+          delete schema.required;
+        }
+
+        if (typeof schema.additionalProperties !== "boolean") {
+          schema.additionalProperties = false;
+        }
+
+        functionRecord.parameters = schema;
+      }
+    }
+
+    return toolRecord;
+  });
+}
+
 /* ─── OpenAI-Compatible Chat Completion Call ─────────────── */
 
 async function callProviderCompletion(config: ReturnType<typeof getServerConfig>, body: ChatRequest) {
@@ -84,11 +131,13 @@ async function callProviderCompletion(config: ReturnType<typeof getServerConfig>
     headers["X-Title"] = "Raily";
   }
 
+  const normalizedTools = sanitizeToolDefinitions(body.tools as Array<Record<string, unknown>> | undefined);
+
   const requestBody = {
     model: config.model,
     messages: body.messages,
-    tools: body.tools && body.tools.length > 0 ? body.tools : undefined,
-    tool_choice: body.tools && body.tools.length > 0 ? "auto" : "none",
+    tools: normalizedTools && normalizedTools.length > 0 ? normalizedTools : undefined,
+    tool_choice: normalizedTools && normalizedTools.length > 0 ? "auto" : "none",
     max_tokens: config.maxTokens,
     temperature: config.temperature,
     stream: false,
@@ -127,11 +176,13 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
     headers["X-Title"] = "Raily";
   }
 
+  const normalizedTools = sanitizeToolDefinitions(body.tools as Array<Record<string, unknown>> | undefined);
+
   const requestBody = {
     model: config.model,
     messages: body.messages,
-    tools: body.tools && body.tools.length > 0 ? body.tools : undefined,
-    tool_choice: body.tools && body.tools.length > 0 ? "auto" : "none",
+    tools: normalizedTools && normalizedTools.length > 0 ? normalizedTools : undefined,
+    tool_choice: normalizedTools && normalizedTools.length > 0 ? "auto" : "none",
     max_tokens: config.maxTokens,
     temperature: config.temperature,
     stream: true,
