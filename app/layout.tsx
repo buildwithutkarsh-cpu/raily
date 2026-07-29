@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
-import Cursor from "@/components/Cursor";
+
+const ibmPlexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-ibm-plex-sans",
+  display: "swap",
+});
 
 const ibmPlexMono = IBM_Plex_Mono({
   subsets: ["latin"],
@@ -32,37 +38,37 @@ export default function RootLayout({
       appearance={{
         elements: {
           rootBox: "w-full",
-          card: "shadow-none border-2 border-[var(--fg)] rounded-none bg-[var(--bg)] w-full",
-          headerTitle: "font-mono text-[var(--fg)] font-bold uppercase tracking-[0.05em] text-xl",
-          headerSubtitle: "font-mono text-[var(--muted)] text-sm",
+          card: "border border-[var(--border)] rounded-none bg-[var(--bg)] w-full shadow-none",
+          headerTitle: "font-sans text-[var(--fg)] font-semibold text-xl",
+          headerSubtitle: "font-sans text-[var(--muted)] text-sm",
           socialButtonsBlockButton:
-            "font-mono border-2 border-[var(--fg)] rounded-none text-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-all duration-150 text-sm uppercase tracking-[0.1em]",
-          socialButtonsBlockButtonText: "font-mono uppercase tracking-[0.05em]",
-          formFieldLabel: "font-mono text-[var(--fg)] text-xs uppercase tracking-[0.1em]",
+            "font-sans border border-[var(--border)] rounded-none text-[var(--fg)] hover:bg-[var(--fg)] hover:text-[var(--bg)] transition-all duration-150 text-sm",
+          socialButtonsBlockButtonText: "font-sans",
+          formFieldLabel: "font-mono text-[var(--fg)] text-xs uppercase tracking-[0.05em]",
           formFieldInput:
-            "font-mono border-2 border-[var(--fg)] rounded-none bg-transparent text-[var(--fg)] focus:ring-0 focus:border-[var(--fg)]",
+            "font-sans border border-[var(--border)] rounded-none bg-transparent text-[var(--fg)] focus:border-[var(--fg)]",
           formButtonPrimary:
-            "font-mono bg-[var(--fg)] text-[var(--bg)] border-2 border-[var(--fg)] rounded-none hover:bg-[var(--railway-red)] hover:border-[var(--railway-red)] transition-all duration-150 text-xs uppercase tracking-[0.1em]",
+            "font-sans bg-[var(--fg)] text-[var(--bg)] border border-[var(--fg)] rounded-none hover:bg-[var(--railway-red)] hover:border-[var(--railway-red)] transition-all duration-150 text-xs uppercase tracking-[0.05em]",
           footerActionLink:
-            "font-mono text-[var(--fg)] hover:text-[var(--railway-red)] underline-offset-2",
-          identityPreviewText: "font-mono text-sm",
+            "font-sans text-[var(--fg)] hover:text-[var(--railway-red)]",
+          identityPreviewText: "font-sans text-sm",
           identityPreviewEditButton: "text-[var(--railway-red)]",
-          dividerLine: "bg-[var(--fg)]/20",
-          dividerText: "font-mono text-[var(--muted)] text-xs uppercase tracking-[0.1em]",
+          dividerLine: "bg-[var(--border)]",
+          dividerText: "font-mono text-[var(--muted)] text-xs uppercase tracking-[0.05em]",
           otpCodeFieldInput:
-            "font-mono border-2 border-[var(--fg)] rounded-none text-[var(--fg)]",
-          alertText: "font-mono text-sm",
-          alert: "border-2 border-[var(--fg)] rounded-none bg-transparent",
+            "font-sans border border-[var(--border)] rounded-none text-[var(--fg)]",
+          alertText: "font-sans text-sm",
+          alert: "border border-[var(--border)] rounded-none bg-transparent",
           formFieldAction:
-            "font-mono text-[var(--railway-red)] text-xs uppercase tracking-[0.1em]",
-          formFieldErrorText: "font-mono text-[var(--railway-red)] text-xs",
+            "font-sans text-[var(--railway-red)] text-xs",
         },
       }}
     >
-      <html lang="en" className={`h-full antialiased ${ibmPlexMono.variable}`}>
-        <body className="min-h-full flex flex-col bg-[var(--bg)] text-[var(--fg)] font-mono">
-          {/* Custom brutalist cursor — replaces default cursor globally */}
-          <Cursor />
+      <html
+        lang="en"
+        className={`h-full antialiased ${ibmPlexSans.variable} ${ibmPlexMono.variable}`}
+      >
+        <body className="min-h-full flex flex-col bg-[var(--bg)] text-[var(--fg)] font-sans">
           {children}
         </body>
       </html>

@@ -1,44 +1,71 @@
+/* ══════════════════════════════════════════════════════════════
+   RAILY — Design System
+   ══════════════════════════════════════════════════════════════
+   
+   Inspired by:
+   • Dieter Rams / Braun — functional purity
+   • Swiss graphic design — grid, typography, hierarchy
+   • Railway signage — utilitarian clarity
+   • Nothing / Linear — precise, confident
+   
+   Philosophy:
+   • Less UI, more experience
+   • Every pixel must have purpose
+   • The interface should disappear behind the conversation
+   • Nothing decorative. Everything functional.
+   
+   ══════════════════════════════════════════════════════════════ */
+
 @import "tailwindcss";
 
-/* ─── DESIGN TOKENS ───────────────────────────────────────────
-   Monochrome + Railway Red. Industrial. Mechanical. Confident.
-   Editorial + Brutalist. No glassmorphism. No heavy shadows.
-   ─────────────────────────────────────────────────────────── */
+/* ─── DESIGN TOKENS ─────────────────────────────────────────── */
 
 :root {
-  --bg: #F5F2EA;
+  --bg: #F6F4EF;
   --fg: #111111;
-  --border: #111111;
-  --muted: rgba(17, 17, 17, 0.5);
-  --accent: #111111;
-  --accent-red: #C41E3A;
-  --accent-red-muted: rgba(196, 30, 58, 0.15);
-  --card-bg: #F5F2EA;
-  --card-border: #111111;
-  --text-muted: rgba(17, 17, 17, 0.5);
+  --border: #D8D6D1;
+  --muted: #8A8A8A;
+  --railway-red: #C41E3A;
+  --railway-red-light: rgba(196, 30, 58, 0.08);
   --success: #111111;
   --warning: #111111;
-  --danger: #111111;
-  --glow: #111111;
-  --railway-red: #C41E3A;
-  --railway-red-light: rgba(196, 30, 58, 0.1);
+  --danger: #C41E3A;
+
+  /* Spacing scale (8px grid) */
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+  --space-8: 64px;
+  --space-10: 80px;
+
+  /* Typography scale */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --text-3xl: 40px;
+
+  /* Layout */
+  --chat-max-width: 700px;
+  --topbar-height: 56px;
 }
 
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--fg);
-  --color-muted: var(--muted);
-  --color-accent: var(--accent);
-  --color-accent-red: var(--accent-red);
   --color-border: var(--border);
-  --color-card-bg: var(--card-bg);
-  --color-card-border: var(--card-border);
-  --color-text-muted: var(--text-muted);
+  --color-muted: var(--muted);
+  --color-accent: var(--railway-red);
+  --color-accent-light: var(--railway-red-light);
   --color-success: var(--success);
-  --color-warning: var(--warning);
   --color-danger: var(--danger);
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* ─── BASE ─────────────────────────────────────────────────── */
@@ -46,14 +73,15 @@
 body {
   background: var(--bg);
   color: var(--fg);
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: var(--text-base);
+  line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden;
 }
 
 html {
-  scroll-behavior: auto;
+  scroll-behavior: smooth;
 }
 
 ::selection {
@@ -61,400 +89,77 @@ html {
   color: var(--bg);
 }
 
-/* ─── NOISE OVERLAY ────────────────────────────────────────── */
+/* ─── TYPOGRAPHY ───────────────────────────────────────────── */
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background-image: radial-gradient(#000 1px, transparent 1px);
-  background-size: 4px 4px;
-  opacity: 0.03;
-  pointer-events: none;
-  z-index: 9999;
-}
-
-/* ─── ALIVE GRID ───────────────────────────────────────────── */
-
-.grid-overlay {
-  position: fixed;
-  inset: 0;
-  background:
-    linear-gradient(rgba(17, 17, 17, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(17, 17, 17, 0.06) 1px, transparent 1px);
-  background-size: 48px 48px;
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* ─── CURSOR ───────────────────────────────────────────────── */
-
-.custom-cursor {
-  position: fixed;
-  width: 8px;
-  height: 8px;
-  background: var(--fg);
-  border: 1px solid var(--bg);
-  pointer-events: none;
-  z-index: 10000;
-  transform: translate(-50%, -50%);
-  opacity: 0;
-  display: none;
-  transition: width 0.2s ease, height 0.2s ease, background 0.2s ease;
-}
-
-.custom-cursor.expanded {
-  width: 24px;
-  height: 24px;
-  background: var(--railway-red);
-}
-
-/* On touch devices, never show the custom cursor */
-@media (hover: none) and (pointer: coarse) {
-  .custom-cursor {
-    display: none !important;
-  }
-}
-
-/* ─── CINEMATIC MODULES ────────────────────────────────────── */
-
-.cinematic {
-  height: 300vh;
-  position: relative;
-}
-
-.cinematic-pin {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  will-change: transform;
-}
-
-.cinematic-word {
-  font-size: 18vw;
-  font-weight: 700;
-  line-height: 0.9;
-  text-transform: uppercase;
-  letter-spacing: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0;
-  user-select: none;
-  position: relative;
-  z-index: 3;
-  will-change: transform, opacity;
-}
-
-.cinematic-letter-group {
-  display: inline-block;
-  position: relative;
-  white-space: nowrap;
-}
-
-.cinematic-india {
-  font-size: 18vw;
-  font-weight: 700;
-  line-height: 0.9;
-  text-transform: uppercase;
-  color: transparent;
-  -webkit-text-stroke: 2px var(--fg);
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  clip-path: inset(0 100% 0 0);
-  pointer-events: none;
-  white-space: nowrap;
-  z-index: 1;
-  will-change: clip-path, transform, opacity;
-}
-
-.cinematic-status {
-  position: absolute;
-  top: 40px;
-  left: 40px;
-  font-size: 11px;
-  letter-spacing: 0.35em;
-  text-transform: uppercase;
-  color: var(--muted);
-  z-index: 5;
-}
-
-.cinematic-side {
-  position: absolute;
-  left: 20px;
-  top: 50%;
-  transform: translateY(-50%) rotate(-90deg);
-  transform-origin: left center;
-  font-size: 10px;
-  letter-spacing: 0.5em;
-  text-transform: uppercase;
-  color: var(--muted);
-  white-space: nowrap;
-  z-index: 5;
-}
-
-.cinematic-scroll {
-  position: absolute;
-  bottom: 40px;
-  right: 40px;
-  font-size: 11px;
-  letter-spacing: 0.4em;
-  text-transform: uppercase;
-  color: var(--muted);
-  z-index: 5;
-}
-
-.cinematic-line {
-  position: absolute;
-  height: 1px;
-  background: var(--fg);
-  width: calc(100% - 80px);
-  left: 40px;
-  z-index: 5;
-}
-
-.cinematic-line.top {
-  top: 80px;
-}
-
-.cinematic-line.bottom {
-  bottom: 80px;
-}
-
-
-/* ─── APP CONTENT (post-cinematic) ─────────────────────────── */
-
-.app-content {
-  position: relative;
-  z-index: 50;
-  background: var(--bg);
-  border-top: 1px solid var(--fg);
-}
-
-/* ─── BUTTONS ──────────────────────────────────────────────── */
-
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 16px 32px;
-  font-size: 14px;
+h1, h2, h3, h4, h5, h6 {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-weight: 600;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--bg);
-  background: var(--fg);
-  border: 2px solid var(--fg);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: var(--text-3xl); }
+h2 { font-size: var(--text-2xl); }
+h3 { font-size: var(--text-xl); }
+h4 { font-size: var(--text-lg); }
+
+/* Monospace — ONLY for metadata, labels, data values */
+.mono,
+label,
+.data-value,
+.metadata {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
-  transition: all 0.15s ease;
-  position: relative;
 }
 
-.btn-primary:hover {
+/* ─── LINKS ────────────────────────────────────────────────── */
+
+a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--border);
+  transition: text-decoration-color 0.15s ease;
+}
+
+a:hover {
+  text-decoration-color: var(--fg);
+}
+
+/* ─── BUTTONS (unstyled base) ──────────────────────────────── */
+
+button {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+}
+
+/* ─── INPUTS ───────────────────────────────────────────────── */
+
+input, textarea, select {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: var(--text-base);
   background: transparent;
-  color: var(--fg);
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 16px 32px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--fg);
-  background: transparent;
-  border: 2px solid var(--fg);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  transition: all 0.15s ease;
-}
-
-.btn-secondary:hover {
-  background: var(--fg);
-  color: var(--bg);
-}
-
-.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 12px;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--fg);
-  background: transparent;
-  border: none;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  transition: opacity 0.15s;
-}
-
-.btn-ghost:hover {
-  opacity: 0.5;
-}
-
-
-/* ─── CARDS ────────────────────────────────────────────────── */
-
-.card {
-  border: 2px solid var(--fg);
-  background: var(--bg);
-  position: relative;
-}
-
-.card:hover {
-  border-color: var(--fg);
-}
-
-.card-content {
-  padding: 24px;
-}
-
-/* ─── CHIPS / BADGES ───────────────────────────────────────── */
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  font-size: 12px;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--fg);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  transition: all 0.15s ease;
-}
-
-.chip:hover {
-  background: var(--fg);
-  color: var(--bg);
-}
-
-.chip-active {
-  background: var(--fg);
-  color: var(--bg);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 10px;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--fg);
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-}
-
-.badge-accent {
-  border-color: var(--fg);
-}
-
-.badge-success {
-  border-color: var(--fg);
-}
-
-.badge-warning {
-  border-color: var(--fg);
-}
-
-.badge-danger {
-  border-color: var(--fg);
-}
-
-/* ─── INPUT ────────────────────────────────────────────────── */
-
-.input-terminal {
-  width: 100%;
-  padding: 16px 24px;
-  font-size: 14px;
-  font-family: "IBM Plex Mono", monospace;
-  color: var(--fg);
-  background: transparent;
-  border: 2px solid var(--fg);
-  transition: none;
-  resize: none;
+  border: 1px solid var(--border);
   outline: none;
+  padding: 10px 14px;
+  transition: border-color 0.15s ease;
 }
 
-.input-terminal:focus {
+input:focus, textarea:focus, select:focus {
   border-color: var(--fg);
 }
 
-.input-terminal::placeholder {
+input::placeholder, textarea::placeholder {
   color: var(--muted);
-}
-
-/* ─── SEATS ────────────────────────────────────────────────── */
-
-.seat {
-  width: 40px;
-  height: 40px;
-  border: 2px solid var(--fg);
-  transition: all 0.15s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-family: "IBM Plex Mono", monospace;
-}
-
-.seat-available {
-  background: transparent;
-  color: var(--fg);
-}
-
-.seat-available:hover {
-  background: var(--fg);
-  color: var(--bg);
-}
-
-.seat-booked {
-  background: var(--fg);
-  opacity: 0.3;
-  border-color: var(--fg);
-}
-
-.seat-selected {
-  background: var(--fg);
-  color: var(--bg);
-  border-color: var(--fg);
-}
-
-.seat-recommended {
-  background: var(--fg);
-  color: var(--bg);
-  border-color: var(--fg);
-}
-
-/* ─── TRAIN LINE ───────────────────────────────────────────── */
-
-.train-line {
-  position: relative;
-  height: 1px;
-  background: var(--fg);
-  overflow: hidden;
 }
 
 /* ─── SCROLLBAR ────────────────────────────────────────────── */
 
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -462,18 +167,40 @@ body::before {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--fg);
+  background: var(--border);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--fg);
+  background: var(--muted);
+}
+
+/* ─── NOISE OVERLAY (subtle grain) ─────────────────────────── */
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(#000 0.8px, transparent 0.8px);
+  background-size: 4px 4px;
+  opacity: 0.025;
+  pointer-events: none;
+  z-index: 9999;
 }
 
 /* ─── UTILITY ──────────────────────────────────────────────── */
 
 * {
-  border-color: var(--fg);
+  border-color: var(--border);
 }
+
+/* ─── SELECTION ────────────────────────────────────────────── */
+
+::selection {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* ─── REDUCED MOTION ───────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -486,42 +213,36 @@ body::before {
   }
 }
 
-/* ─── APP LAYOUT UTILITIES ─────────────────────────────────── */
+/* ─── KEYFRAMES ────────────────────────────────────────────── */
 
-.app-scroll {
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--fg) transparent;
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-/* ─── Ensure components get font-family */
-button, input, textarea, select {
-  font-family: "IBM Plex Mono", monospace;
+@keyframes slide-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
-/* ─── Focus-visible rings for keyboard accessibility ──────── */
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-[tabindex]:focus-visible {
-  outline: 2px solid var(--fg);
-  outline-offset: 2px;
+@keyframes slide-down {
+  from { transform: translateY(-12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
-/* Remove focus outline for mouse users (keeps default browser focus for mouse clicks) */
-button:focus:not(:focus-visible),
-a:focus:not(:focus-visible),
-input:focus:not(:focus-visible) {
-  outline: none;
+@keyframes scale-in {
+  from { transform: scale(0.97); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
-/* ─── Keyframes ────────────────────────────────────────────── */
+@keyframes clip-reveal {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0); }
+}
 
-@keyframes pulse-slow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
 }
 
 @keyframes cursor-blink {
@@ -529,89 +250,51 @@ input:focus:not(:focus-visible) {
   50% { opacity: 0; }
 }
 
-@keyframes slide-up {
-  from { transform: translateY(20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-@keyframes slide-down {
-  from { transform: translateY(-20px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-@keyframes fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes scale-in {
-  from { transform: scale(0.95); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
-}
-
-@keyframes marquee {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(-50%); }
-}
-
-@keyframes typingDot {
-  0%, 100% { opacity: 0.3; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1); }
-}
-
-@keyframes train-track {
+@keyframes train-move {
   0% { transform: translateX(-100%); }
-  100% { transform: translateX(100vw); }
+  100% { transform: translateX(400%); }
 }
 
-/* ─── Railway-specific accents ─────────────────────────────── */
+/* ─── MECHANICAL TRANSITIONS ───────────────────────────────── */
 
-.text-railway-red {
-  color: var(--railway-red);
+.mechanical-enter {
+  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.border-railway-red {
-  border-color: var(--railway-red);
+.mechanical-scale {
+  animation: scale-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.bg-railway-red {
-  background-color: var(--railway-red);
+.mechanical-clip {
+  animation: clip-reveal 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.bg-railway-red-light {
-  background-color: var(--railway-red-light);
+/* ─── CHAT SPECIFIC ────────────────────────────────────────── */
+
+.chat-message {
+  animation: slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-/* ─── Landing Page Animations ───────────────────────────────── */
-
-.fade-up {
+.chat-message-enter {
   opacity: 0;
-  transform: translateY(20px);
-  transition: opacity 0.6s ease, transform 0.6s ease;
+  transform: translateY(8px);
 }
 
-.fade-up.animate-in {
-  opacity: 1;
-  transform: translateY(0);
+/* ─── Focus visible for accessibility ──────────────────────── */
+
+:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
 }
 
-/* Stagger animation delays */
-.fade-up:nth-child(1) { transition-delay: 0ms; }
-.fade-up:nth-child(2) { transition-delay: 80ms; }
-.fade-up:nth-child(3) { transition-delay: 160ms; }
-.fade-up:nth-child(4) { transition-delay: 240ms; }
-.fade-up:nth-child(5) { transition-delay: 320ms; }
-.fade-up:nth-child(6) { transition-delay: 400ms; }
+:focus:not(:focus-visible) {
+  outline: none;
+}
 
-/* Respect reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  .fade-up {
-    opacity: 1;
-    transform: none;
-    transition: none;
-  }
-  .fade-up.animate-in {
-    opacity: 1;
-    transform: none;
+/* ─── Touch device adjustments ─────────────────────────────── */
+
+@media (hover: none) and (pointer: coarse) {
+  input, button {
+    font-size: 16px; /* Prevent iOS zoom */
   }
 }
