@@ -15,6 +15,45 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { useBooking } from "@/lib/booking-store";
+import { Loader2 } from "lucide-react";
+
+/* ── Skeleton ──────────────────────────────────────────────── */
+
+function TrainSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="border-2 border-[var(--fg)] p-12 text-center">
+        <div className="w-14 h-14 mx-auto mb-5 flex items-center justify-center border-2 border-[var(--fg)]">
+          <Loader2 className="h-7 w-7 animate-spin text-[var(--fg)]" />
+        </div>
+        <p className="text-sm font-bold uppercase tracking-[0.05em] mb-2">
+          Searching Trains
+        </p>
+        <p className="text-[12px] text-[var(--muted)]">
+          Checking schedules, availability, and pricing...
+        </p>
+        {/* Animated progress bar */}
+        <div className="mt-6 max-w-xs mx-auto h-1 bg-[var(--fg)]/10 overflow-hidden">
+          <motion.div
+            className="h-full bg-[var(--fg)]"
+            initial={{ width: "0%" }}
+            animate={{ width: "90%" }}
+            transition={{ duration: 8, ease: "easeInOut" }}
+          />
+        </div>
+        <div className="mt-6 grid grid-cols-3 gap-3 max-w-md mx-auto">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="border border-[var(--fg)]/20 p-3 text-left">
+              <div className="h-3 w-16 bg-[var(--fg)]/10 mb-2" />
+              <div className="h-4 w-20 bg-[var(--fg)]/10 mb-1" />
+              <div className="h-3 w-14 bg-[var(--fg)]/10" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── Badge Config ──────────────────────────────────────────── */
 
@@ -40,6 +79,29 @@ export default function TrainExplorer() {
 
   // Use trains from booking store or fallback
   const trains = state.trains;
+  const isLoading = state.isProcessing && state.step === "searching" && trains.length === 0;
+
+  // Loading skeleton
+  if (isLoading) {
+    return <TrainSkeleton />;
+  }
+
+  // Empty state (step is idle or recommendations with no trains)
+  if (!isLoading && trains.length === 0 && state.step !== "searching") {
+    return (
+      <div className="space-y-6">
+        <div className="border-2 border-dashed border-[var(--fg)]/30 p-12 text-center">
+          <Train className="h-12 w-12 mx-auto mb-4 text-[var(--muted)]" />
+          <h3 className="text-lg font-bold uppercase tracking-[0.03em] mb-2">
+            No trains found
+          </h3>
+          <p className="text-[13px] text-[var(--muted)] max-w-md mx-auto leading-relaxed">
+            Try a different route, date, or use the AI assistant to find the perfect train.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const sorted = useMemo(() => {
     const list = [...trains];
