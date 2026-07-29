@@ -5,12 +5,12 @@ import {
   useContext,
   useCallback,
   useState,
+  useRef,
   type ReactNode,
-  type Dispatch,
-  type SetStateAction,
 } from "react";
-import { getRailwayClient } from "@/lib/railway/client";
-import type { TrainSearchEntry, ApiResponse } from "@/lib/railway/types";
+import * as rapi from "@/lib/rapi/endpoints";
+import { processWithAI } from "@/lib/ai/orchestrator";
+import type { AIComponentType } from "@/lib/ai/types";
 
 /* ─── Types ───────────────────────────────────────────────── */
 
@@ -58,6 +58,45 @@ export interface SeatRecommendation {
   reason: string;
 }
 
+/* ─── Chat Message System ─────────────────────────────────── */
+
+export type ChatComponentType =
+  | "train-list"
+  | "seat-map"
+  | "booking-confirmation"
+  | "journey-tracker"
+  | "pnr-status"
+  | "booking-history"
+  | "loading"
+  | "welcome"
+  | "error"
+  | "text";
+
+export interface Message {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  component?: ChatComponentType;
+  timestamp: number;
+  /** If true, content is partial (streaming) and will be updated */
+  streaming?: boolean;
+}
+
+let messageCounter = 0;
+function generateMessageId(): string {
+  return `msg-${Date.now()}-${++messageCounter}`;
+}
+
+export function createUserMessage(content: string): Message {
+  return { id: generateMessageId(), role: "user", content, timestamp: Date.now() };
+}
+
+export function createAssistantMessage(content: string, component?: ChatComponentType): Message {
+  return { id: generateMessageId(), role: "assistant", content, component, timestamp: Date.now() };
+}
+
+/* ─── Booking State ───────────────────────────────────────── */
+
 export interface BookingState {
   step: BookingStep;
   query: ExtractedQuery | null;
@@ -69,89 +108,51 @@ export interface BookingState {
   bookingConfirmed: boolean;
   pnrNumber: string | null;
   isProcessing: boolean;
-  lastApiCall: {
-    endpoint: string;
-    success: boolean;
-    cached: boolean;
-    timestamp: string;
-  } | null;
+  messages: Message[];
+  rapiConnected: boolean;
+  rapiError: string | null;
+  aiConfigured: boolean;
+  aiError: string | null;
 }
 
 /* ─── City-to-Station Code Mapping ──────────────────────────── */
 
 const CITY_TO_CODE: Record<string, string> = {
-  delhi: "NDLS",
-  "new delhi": "NDLS",
-  mumbai: "BCT",
-  bombay: "BCT",
+  delhi: "NDLS", "new delhi": "NDLS",
+  mumbai: "BCT", bombay: "BCT",
   jaipur: "JP",
-  chennai: "MAS",
-  madras: "MAS",
-  bangalore: "SBC",
-  bengaluru: "SBC",
-  howrah: "HWH",
-  kolkata: "HWH",
-  calcutta: "HWH",
-  chandigarh: "CDG",
-  lucknow: "LKO",
-  patna: "PNBE",
-  ahmedabad: "ADI",
-  pune: "PUNE",
-  bhopal: "BPL",
-  amritsar: "ASR",
-  nagpur: "NGP",
-  secunderabad: "SC",
-  hyderabad: "SC",
-  guwahati: "GHY",
-  varanasi: "BSB",
-  agra: "AGC",
-  mathura: "MTJ",
-  ajmer: "AII",
-  udaipur: "UDZ",
-  jodhpur: "JU",
-  indore: "INDB",
-  vadodara: "BRC",
-  surat: "ST",
+  chennai: "MAS", madras: "MAS",
+  bangalore: "SBC", bengaluru: "SBC",
+  howrah: "HWH", kolkata: "HWH", calcutta: "HWH",
+  chandigarh: "CDG", lucknow: "LKO", patna: "PNBE",
+  ahmedabad: "ADI", pune: "PUNE", bhopal: "BPL",
+  amritsar: "ASR", nagpur: "NGP",
+  secunderabad: "SC", hyderabad: "SC",
+  guwahati: "GHY", varanasi: "BSB",
+  agra: "AGC", mathura: "MTJ", ajmer: "AII",
+  udaipur: "UDZ", jodhpur: "JU",
+  indore: "INDB", vadodara: "BRC", surat: "ST",
 };
 
 export function resolveStationCode(name: string): string {
   const clean = name.trim().toLowerCase();
-  // Direct code match (e.g., "NDLS")
   if (/^[A-Z]{2,5}$/i.test(clean)) return clean.toUpperCase();
-  // City name lookup
-  return CITY_TO_CODE[clean] || clean.substring(0, 4).toUpperCase();
+  return CITY_TO_CODE[clean] || name.substring(0, 4).toUpperCase();
 }
 
-/* ─── PNR Generator ─────────────────────────────────────────── */
+/* ─── PNR Generator (simulated booking) ────────────────────── */
 
-/** Common first digits for IR-style PNR numbers */
 const PNR_FIRST_DIGITS = [4, 6, 8];
 
-/**
- * Generate a deterministic 10-digit IR-style PNR based on train
- * number, current date, coach, and seat. Each booking attempt
- * gets a unique PNR while being reproducible from the same inputs.
- *
- * IR PNRs are 10 digits, typically starting with 4, 6, or 8.
- */
 function generatePNR(trainNumber: string, coach: string, seatId: string | null): string {
   const now = new Date();
   const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-
-  // Build a hash from train number + date + coach + seat
   const raw = `${trainNumber}|${dateStr}|${coach}|${seatId || "-"}`;
   let hash = 0;
-  for (let i = 0; i < raw.length; i++) {
-    const char = raw.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0; // Convert to 32-bit integer
-  }
-
-  // Ensure positive and map to 9 digits (leaving room for first digit)
+  for (let i = 0; i < raw.length; i++) { const char = raw.charCodeAt(i); hash = ((hash << 5) - hash) + char; hash |= 0; }
   const absHash = Math.abs(hash);
   const nineDigits = absHash % 1_000_000_000;
   const firstDigit = PNR_FIRST_DIGITS[absHash % PNR_FIRST_DIGITS.length];
-
   return `${firstDigit}${String(nineDigits).padStart(9, "0")}`;
 }
 
@@ -176,50 +177,36 @@ function getRecentBookings(): RecentBooking[] {
   try {
     const stored = localStorage.getItem(RECENT_BOOKINGS_KEY);
     return stored ? JSON.parse(stored) : [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 function addRecentBooking(booking: RecentBooking): void {
   if (typeof window === "undefined") return;
   try {
     const existing = getRecentBookings();
-    // Keep latest 5, avoid duplicates by PNR
     const filtered = existing.filter((b) => b.pnr !== booking.pnr);
     const updated = [booking, ...filtered].slice(0, 5);
     localStorage.setItem(RECENT_BOOKINGS_KEY, JSON.stringify(updated));
-  } catch {
-    // localStorage might be full or disabled
-  }
+  } catch { /* silent */ }
 }
 
 export function getStoredRecentBookings(): RecentBooking[] {
   return getRecentBookings();
 }
 
-/* ─── Natural Language Query Parser ───────────────────────── */
+/* ─── Format Helpers ───────────────────────────────────────── */
 
-/**
- * Get the next occurrence of a weekday name (e.g. "friday") as a YYYY-MM-DD string.
- * Returns today if the weekday matches today, or the next occurrence otherwise.
- */
-function getNextWeekday(dayName: string): string {
-  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const targetIndex = days.indexOf(dayName.toLowerCase());
-  if (targetIndex === -1) return toDateString(new Date());
-
-  const now = new Date();
-  const currentDay = now.getDay(); // 0=Sun, 1=Mon...
-  let diff = targetIndex - currentDay;
-  if (diff < 0) diff += 7; // Next week if the day has already passed
-
-  const next = new Date(now);
-  next.setDate(now.getDate() + diff);
-  return toDateString(next);
+export function formatDisplayDate(dateStr: string): string {
+  if (!dateStr) return "";
+  const today = toDateString(new Date());
+  if (dateStr === today) return "Today";
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (dateStr === toDateString(tomorrow)) return "Tomorrow";
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
-/** Convert a Date object to YYYY-MM-DD string */
 function toDateString(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -227,263 +214,46 @@ function toDateString(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Get a human-readable display date from a YYYY-MM-DD string.
- * Returns "Today", "Tomorrow", or a formatted date like "Fri, 28 Jul 2026".
- */
-export function formatDisplayDate(dateStr: string): string {
-  if (!dateStr) return "";
+/* ─── Default State ────────────────────────────────────────── */
 
-  const today = toDateString(new Date());
-  if (dateStr === today) return "Today";
-
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  if (dateStr === toDateString(tomorrow)) return "Tomorrow";
-
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-IN", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-}
-
-/**
- * Parse a natural language query string (e.g. "Book Delhi to Jaipur tomorrow, lower berth, under ₹800")
- * into a structured ExtractedQuery object with a YYYY-MM-DD date.
- */
-export function parseNaturalLanguageQuery(text: string): ExtractedQuery {
-  const lower = text.toLowerCase();
-
-  // Extract origin & destination
-  // Pattern: "from X to Y", "book X to Y", "X to Y", "X → Y"
-  const routePattern =
-    /(?:from\s+|book\s+)?(\w[\w\s]*?)\s*(?:to|→|->|for|–|for\s)(\w[\w\s]*?)(?:\s+(?:on|tomorrow|today|next|this|coming|for)|$)/i;
-  const routeMatch = text.match(routePattern);
-
-  let origin = "";
-  let destination = "";
-  if (routeMatch) {
-    origin = routeMatch[1]?.trim() || "";
-    destination = routeMatch[2]?.trim() || "";
-    // Trim trailing words like "on", "this", "next" from destination
-    destination = destination.replace(/\s+(on|this|next|coming|for|at|in)\s*$/i, "").trim();
-  }
-
-  // Extract budget
-  const budgetMatch = text.match(
-    /(?:under|below|less than|budget|max|within|₹|rs\.?\s*)\s*(\d{3,5})/i
-  );
-  const budget = budgetMatch ? parseInt(budgetMatch[1]) : undefined;
-
-  // Extract preferences
-  let preference = "";
-  if (lower.includes("window")) preference = "Window seat";
-  else if (lower.includes("lower") || lower.includes("berth"))
-    preference = "Lower berth";
-  else if (lower.includes("upper")) preference = "Upper berth";
-  else if (lower.includes("aisle")) preference = "Aisle seat";
-  else if (lower.includes("sleeper")) preference = "Sleeper class";
-  else if (lower.includes("ac") || lower.includes("3a") || lower.includes("3ac"))
-    preference = "AC 3-tier";
-  else if (lower.includes("cc") || lower.includes("chair"))
-    preference = "Chair car";
-
-  // Extract date — always returns YYYY-MM-DD format
-  let date = "";
-  if (lower.includes("tomorrow")) {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    date = toDateString(tomorrow);
-  } else if (lower.includes("today") || lower.includes("now")) {
-    date = toDateString(new Date());
-  } else if (lower.includes("friday")) {
-    date = getNextWeekday("friday");
-  } else if (lower.includes("monday")) {
-    date = getNextWeekday("monday");
-  } else if (lower.includes("saturday")) {
-    date = getNextWeekday("saturday");
-  } else if (lower.includes("sunday")) {
-    date = getNextWeekday("sunday");
-  } else if (lower.includes("tuesday")) {
-    date = getNextWeekday("tuesday");
-  } else if (lower.includes("wednesday")) {
-    date = getNextWeekday("wednesday");
-  } else if (lower.includes("thursday")) {
-    date = getNextWeekday("thursday");
-  } else {
-    date = toDateString(new Date());
-  }
-
+function createWelcomeMessage(): Message {
   return {
-    origin,
-    destination,
-    date,
-    budget,
-    preference,
-    raw: text,
+    id: "welcome", role: "assistant",
+    content: "I'm your travel assistant for Indian Railways. Tell me where you'd like to go — I can search trains, check PNR status, track live journeys, and help with bookings.\n\nTry: \"Book Delhi to Jaipur tomorrow morning\"",
+    component: "welcome", timestamp: Date.now(),
   };
 }
 
-export function isTrainSearchQuery(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    lower.includes("book") ||
-    lower.includes("train") ||
-    lower.includes("ticket") ||
-    lower.includes("journey") ||
-    lower.includes("going") ||
-    lower.includes("travel") ||
-    lower.includes("route") ||
-    lower.includes("delhi") ||
-    lower.includes("mumbai") ||
-    lower.includes("jaipur") ||
-    lower.includes("bangalore") ||
-    lower.includes("chennai") ||
-    lower.includes("pune") ||
-    lower.includes("kolkata") ||
-    lower.includes("agra") ||
-    // Any "X to Y" pattern is likely a route query
-    /\w+\s+(?:to|→)\s+\w+/i.test(text)
-  );
-}
-
-export function isPNRQuery(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    !!text.match(/\b\d{10}\b/) ||
-    lower.includes("pnr") ||
-    (lower.includes("check") && lower.includes("status"))
-  );
-}
-
-/* ─── Default State ────────────────────────────────────────── */
-
 const defaultState: BookingState = {
-  step: "idle",
-  query: null,
-  trains: [],
-  selectedTrain: null,
-  selectedCoach: "B1",
-  selectedSeat: null,
-  seatRecommendation: null,
-  bookingConfirmed: false,
-  pnrNumber: null,
-  isProcessing: false,
-  lastApiCall: null,
+  step: "idle", query: null, trains: [], selectedTrain: null,
+  selectedCoach: "B1", selectedSeat: null, seatRecommendation: null,
+  bookingConfirmed: false, pnrNumber: null, isProcessing: false,
+  messages: [createWelcomeMessage()], rapiConnected: false, rapiError: null,
+  aiConfigured: false, aiError: null,
 };
 
-/* ─── Price & Class Defaults by Train Type ─────────────────── */
+/* ─── Train Badge Logic ────────────────────────────────────── */
 
-const TRAIN_TYPE_DEFAULTS: Record<
-  string,
-  { price: number; classType: string; available: number }
-> = {
-  RAJDHANI:    { price: 1940, classType: "3A", available: 48 },
-  SHATABDI:    { price: 890,  classType: "CC", available: 64 },
-  DURONTO:     { price: 2060, classType: "3A", available: 36 },
-  GARIB_RATH:  { price: 740,  classType: "3A", available: 80 },
-  SUPERFAST:   { price: 720,  classType: "SL", available: 120 },
-  EXPRESS:     { price: 380,  classType: "SL", available: 180 },
-  PASSENGER:   { price: 160,  classType: "2S", available: 240 },
+const SUPERFAST_TYPES = new Set(["RAJDHANI", "SHATABDI", "DURONTO", "SUPERFAST", "GARIB_RATH", "VANDEBHARAT"]);
+
+const TRAIN_TYPE_DEFAULTS: Record<string, { price: number; classType: string; available: number }> = {
+  RAJDHANI: { price: 1940, classType: "3A", available: 48 },
+  SHATABDI: { price: 890, classType: "CC", available: 64 },
+  DURONTO: { price: 2060, classType: "3A", available: 36 },
+  GARIB_RATH: { price: 740, classType: "3A", available: 80 },
+  SUPERFAST: { price: 720, classType: "SL", available: 120 },
+  EXPRESS: { price: 380, classType: "SL", available: 180 },
+  PASSENGER: { price: 160, classType: "2S", available: 240 },
 };
-
-const SUPERFAST_TYPES = new Set([
-  "RAJDHANI", "SHATABDI", "DURONTO", "SUPERFAST", "GARIB_RATH", "VANDEBHARAT",
-]);
 
 function getDefaultForType(type: string) {
   return TRAIN_TYPE_DEFAULTS[type] || TRAIN_TYPE_DEFAULTS["EXPRESS"];
 }
 
-/* ─── Convert API Train Data to Frontend Format ─────────────── */
-
-function convertToFrontendTrain(
-  entry: TrainSearchEntry,
-  index: number
-): Train {
-  const hasClasses = entry.availableClasses.length > 0;
-
-  let price: number;
-  let available: number;
-  let classType: string;
-
-  if (hasClasses) {
-    const cheapestClass = entry.availableClasses.reduce((best, current) =>
-      current.fare < best.fare ? current : best
-    );
-    price = cheapestClass.fare;
-    available = entry.availableClasses.reduce((sum, c) => sum + c.seats, 0);
-    classType = entry.availableClasses[0]?.code || "SL";
-  } else {
-    // Augment with sensible defaults when API returns no class data
-    const defaults = getDefaultForType(entry.train.type || "EXPRESS");
-    price = defaults.price;
-    available = defaults.available + Math.floor(Math.random() * 40) - 20;
-    classType = defaults.classType;
-  }
-
-  const probability =
-    price > 0
-      ? Math.min(Math.round((1 - price / 5000) * 50 + 45 + Math.random() * 5), 98)
-      : 85;
-
-  // Assign badges based on price if API didn't provide recommendations
-  let badge = entry.recommendation?.badge;
-  let reason = entry.recommendation?.reason;
-
-  if (!badge && hasClasses) {
-    const trainTypes = entry.availableClasses.map((c) => c.code);
-    if (
-      trainTypes.includes("1A") ||
-      entry.train.type === "RAJDHANI" ||
-      entry.train.type === "DURONTO"
-    ) {
-      badge = "comfortable";
-      reason =
-        "Premium class available with spacious berths and onboard catering.";
-    } else if (price <= 500) {
-      badge = "cheapest";
-      reason =
-        "Most economical option. Great value for budget-conscious travelers.";
-    }
-  }
-
-  // Assign badges by index fallback when no recommendation and no class data
-  if (!badge && !hasClasses && index === 0) {
-    badge = "best";
-    reason =
-      "Best balance of speed, comfort & price on this route.";
-  }
-
+export function getSeatRecommendation(): SeatRecommendation {
   return {
-    id: `${entry.train.number}-${index}`,
-    name: entry.train.name,
-    number: entry.train.number,
-    departure: entry.train.departure,
-    arrival: entry.train.arrival,
-    duration: entry.train.duration,
-    price: Math.max(price, 100), // Ensure minimum ₹100
-    available: Math.max(available, 5), // Ensure at least 5 seats
-    probability,
-    classType,
-    isSuperfast: SUPERFAST_TYPES.has(entry.train.type || ""),
-    rating: Math.round((4 + Math.random()) * 10) / 10,
-    badge,
-    reason,
-  };
-}
-
-export function getSeatRecommendation(_train: Train): SeatRecommendation {
-  return {
-    seatId: "7L",
-    number: 7,
-    tier: "Lower",
-    coach: "B1",
-    reason:
-      "✓ Window seat — enjoy the sunrise views as we cross the Aravalli hills.\n✓ Lower berth — easier access, preferred for daytime journeys.\n✓ Away from toilets — bay 3 is the quietest section of the coach.\n✓ Near exit — just 2 rows from the door for quick deboarding.",
+    seatId: "7L", number: 7, tier: "Lower", coach: "B1",
+    reason: "Window seat — enjoy the sunrise views as we cross the Aravalli hills.\nLower berth — easier access, preferred for daytime journeys.\nAway from toilets — bay 3 is the quietest section.\nNear exit — just 2 rows from the door for quick deboarding.",
   };
 }
 
@@ -493,217 +263,240 @@ interface BookingContextValue {
   state: BookingState;
   setStep: (step: BookingStep) => void;
   setQuery: (query: ExtractedQuery) => void;
-  setTrains: (trains: Train[]) => void;
   selectTrain: (train: Train) => void;
   setSelectedCoach: (coach: string) => void;
   setSelectedSeat: (seatId: string | null) => void;
   setSeatRecommendation: (rec: SeatRecommendation | null) => void;
-  confirmBooking: () => void;
+  confirmBooking: () => Promise<string>;
   resetBooking: () => void;
-  updateState: Dispatch<SetStateAction<BookingState>>;
-  /** Fetch trains from the Railway API (real or mock) */
-  fetchTrains: (query: ExtractedQuery) => Promise<void>;
-  /** Check PNR status via the Railway API */
-  fetchPNR: (pnr: string) => Promise<ApiResponse<unknown>>;
-  /** Search stations via the Railway API */
-  searchStations: (q: string) => Promise<ApiResponse<unknown>>;
-  /** Get live status via Railway API */
-  fetchLiveStatus: (trainNumber: string) => Promise<ApiResponse<unknown>>;
-  /** Get seat availability via Railway API */
-  fetchAvailability: (trainNumber: string, from: string, to: string, date?: string, cls?: string) => Promise<ApiResponse<unknown>>;
+  addMessage: (msg: Message) => void;
+  clearMessages: () => void;
+  processUserInput: (text: string) => Promise<void>;
+  checkRapiConnection: () => Promise<boolean>;
+  /** Update the last assistant message (used for streaming text) */
+  updateLastMessage: (partialContent: string, component?: ChatComponentType) => void;
+  /** Convert AI component type to ChatComponentType */
+  mapAIComponent: (aiComponent: string) => ChatComponentType;
 }
 
 const BookingContext = createContext<BookingContextValue | null>(null);
 
 export function BookingProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<BookingState>(defaultState);
+  // Keep a ref to the streaming message ID so we can update it
+  const streamingMsgId = useRef<string | null>(null);
 
-  const setStep = useCallback((step: BookingStep) => {
-    setState((prev) => ({ ...prev, step, isProcessing: false }));
-  }, []);
+  const setStep = useCallback((step: BookingStep) => setState((prev) => ({ ...prev, step, isProcessing: false })), []);
+  const setQuery = useCallback((query: ExtractedQuery) => setState((prev) => ({ ...prev, query })), []);
+  const selectTrain = useCallback((train: Train) => setState((prev) => ({
+    ...prev, selectedTrain: train, step: "coach-view" as const, selectedCoach: "B1", selectedSeat: null, seatRecommendation: getSeatRecommendation(),
+  })), []);
+  const setSelectedCoach = useCallback((coach: string) => setState((prev) => ({ ...prev, selectedCoach: coach })), []);
+  const setSelectedSeat = useCallback((seatId: string | null) => setState((prev) => ({ ...prev, selectedSeat: seatId })), []);
+  const setSeatRecommendation = useCallback((rec: SeatRecommendation | null) => setState((prev) => ({ ...prev, seatRecommendation: rec })), []);
 
-  const setQuery = useCallback((query: ExtractedQuery) => {
-    setState((prev) => ({ ...prev, query }));
-  }, []);
-
-  const setTrains = useCallback((trains: Train[]) => {
-    setState((prev) => ({ ...prev, trains }));
-  }, []);
-
-  const selectTrain = useCallback((train: Train) => {
-    setState((prev) => ({
-      ...prev,
-      selectedTrain: train,
-      step: "coach-view",
-      selectedCoach: "B1",
-      selectedSeat: null,
-      seatRecommendation: getSeatRecommendation(train),
-    }));
-  }, []);
-
-  const setSelectedCoach = useCallback((coach: string) => {
-    setState((prev) => ({ ...prev, selectedCoach: coach }));
-  }, []);
-
-  const setSelectedSeat = useCallback((seatId: string | null) => {
-    setState((prev) => ({ ...prev, selectedSeat: seatId }));
-  }, []);
-
-  const setSeatRecommendation = useCallback(
-    (rec: SeatRecommendation | null) => {
-      setState((prev) => ({ ...prev, seatRecommendation: rec }));
-    },
-    []
-  );
-
-  const confirmBooking = useCallback(async () => {
-    // Brief realistic processing delay
-    setState((prev) => ({ ...prev, isProcessing: true, step: "confirming" }));
-    await new Promise((r) => setTimeout(r, 400));
-
-    const train = state.selectedTrain;
-    const pnr = generatePNR(
-      train?.number || "00000",
-      state.selectedCoach || "B1",
-      state.selectedSeat
-    );
-
-    // Persist to recent bookings in localStorage
-    if (train && state.query) {
-      addRecentBooking({
-        pnr,
-        trainName: train.name,
-        trainNumber: train.number,
-        from: state.query.origin.toUpperCase() || "—",
-        to: state.query.destination.toUpperCase() || "—",
-        date: state.query.date || new Date().toLocaleDateString(),
-        time: `${train.departure} → ${train.arrival}`,
-        status: "CONFIRMED",
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    setState((prev) => ({
-      ...prev,
-      isProcessing: false,
-      bookingConfirmed: true,
-      step: "confirmed",
-      pnrNumber: pnr,
-    }));
-  }, [state.selectedTrain, state.selectedCoach, state.selectedSeat, state.query]);
-
-  const resetBooking = useCallback(() => {
-    setState(defaultState);
-  }, []);
-
-  /* ── API: Fetch Trains ──────────────────────────────────── */
-  const fetchTrains = useCallback(async (query: ExtractedQuery) => {
-    setState((prev) => ({ ...prev, isProcessing: true, step: "searching" }));
-
-    try {
-      const client = getRailwayClient();
-      const fromCode = resolveStationCode(query.origin);
-      const toCode = resolveStationCode(query.destination);
-
-      const result = await client.searchTrains(fromCode, toCode, query.date);
-
-      if (!result.success) {
-        setState((prev) => ({
-          ...prev,
-          isProcessing: false,
-          trains: [],
-          lastApiCall: {
-            endpoint: "searchTrains",
-            success: false,
-            cached: false,
+  const confirmBooking = useCallback(async (): Promise<string> => {
+    // We need to read current state — use a ref pattern
+    return new Promise((resolve) => {
+      setState((prev) => {
+        const train = prev.selectedTrain;
+        const coach = prev.selectedCoach;
+        const seat = prev.selectedSeat;
+        const query = prev.query;
+        const pnr = generatePNR(train?.number || "00000", coach || "B1", seat);
+        if (train && query) {
+          addRecentBooking({
+            pnr,
+            trainName: train.name,
+            trainNumber: train.number,
+            from: query.origin.toUpperCase() || "—",
+            to: query.destination.toUpperCase() || "—",
+            date: query.date || new Date().toLocaleDateString(),
+            time: `${train.departure} → ${train.arrival}`,
+            status: "CONFIRMED" as const,
             timestamp: new Date().toISOString(),
-          },
-        }));
-        return;
-      }
+          });
+        }
+        return { ...prev, isProcessing: false, bookingConfirmed: true, step: "confirmed" as const, pnrNumber: pnr };
+      });
+      // Wait for state update then resolve with PNR from state
+      setTimeout(() => {
+        setState((prev) => {
+          resolve(prev.pnrNumber || "");
+          return prev;
+        });
+      }, 50);
+    });
+  }, []);
 
-      setState((prev) => ({
-        ...prev,
-        isProcessing: false,
-        trains: (result.data?.trains || []).map((t, i) =>
-          convertToFrontendTrain(t, i)
-        ),
-        step: "recommendations",
-        lastApiCall: {
-          endpoint: "searchTrains",
-          success: result.success,
-          cached: result.cached,
-          timestamp: result.timestamp,
-        },
-      }));
-    } catch {
-      setState((prev) => ({
-        ...prev,
-        isProcessing: false,
-        trains: [],
-        step: "idle",
-        lastApiCall: {
-          endpoint: "searchTrains",
-          success: false,
-          cached: false,
-          timestamp: new Date().toISOString(),
-        },
-      }));
+  const resetBooking = useCallback(() => setState({ ...defaultState, messages: [createWelcomeMessage()] }), []);
+  const addMessage = useCallback((msg: Message) => setState((prev) => ({ ...prev, messages: [...prev.messages, msg] })), []);
+  const clearMessages = useCallback(() => setState((prev) => ({ ...prev, messages: [createWelcomeMessage()] })), []);
+
+  const updateLastMessage = useCallback((partialContent: string, component?: ChatComponentType) => {
+    setState((prev) => {
+      const messages = [...prev.messages];
+      const lastIdx = messages.length - 1;
+      if (lastIdx >= 0 && messages[lastIdx].role === "assistant") {
+        messages[lastIdx] = {
+          ...messages[lastIdx],
+          content: partialContent,
+          component: component || messages[lastIdx].component,
+          streaming: true,
+        };
+      }
+      return { ...prev, messages };
+    });
+  }, []);
+
+  /** Map AI component type tags to our ChatComponentType */
+  const mapAIComponent = useCallback((aiComponent: string): ChatComponentType => {
+    const map: Record<string, ChatComponentType> = {
+      "show_train_list": "train-list",
+      "show_seat_map": "seat-map",
+      "show_booking_confirmation": "booking-confirmation",
+      "show_journey_tracker": "journey-tracker",
+      "show_pnr_status": "pnr-status",
+      "show_booking_history": "booking-history",
+      "show_station_search": "text",
+      "show_route_comparison": "train-list",
+    };
+    return map[aiComponent] || "text";
+  }, []);
+
+  const checkRapiConnection = useCallback(async (): Promise<boolean> => {
+    try {
+      const result = await rapi.getHealth();
+      const connected = result.success;
+      setState((prev) => ({ ...prev, rapiConnected: connected, rapiError: connected ? null : "RAPI server unreachable" }));
+      return connected;
+    } catch (err: any) {
+      setState((prev) => ({ ...prev, rapiConnected: false, rapiError: err?.message || "RAPI server unreachable" }));
+      return false;
     }
   }, []);
 
-  /* ── API: Fetch PNR ─────────────────────────────────────── */
-  const fetchPNR = useCallback(async (pnr: string) => {
-    const client = getRailwayClient();
-    const result = await client.getPNRStatus(pnr);
-    return result;
-  }, []);
+  /* ── Process User Input (AI-native) ──────────────────────── */
 
-  /* ── API: Search Stations ───────────────────────────────── */
-  const searchStations = useCallback(async (q: string) => {
-    const client = getRailwayClient();
-    const result = await client.searchStations(q);
-    return result;
-  }, []);
+  const processUserInput = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-  /* ── API: Live Status ───────────────────────────────────── */
-  const fetchLiveStatus = useCallback(async (trainNumber: string) => {
-    const client = getRailwayClient();
-    const result = await client.getLiveStatus(trainNumber);
-    return result;
-  }, []);
+    // Add user message
+    const userMsg = createUserMessage(trimmed);
+    setState((prev) => ({ ...prev, messages: [...prev.messages, userMsg], isProcessing: true }));
 
-  /* ── API: Seat Availability ─────────────────────────────── */
-  const fetchAvailability = useCallback(
-    async (trainNumber: string, from: string, to: string, date?: string, cls?: string) => {
-      const client = getRailwayClient();
-      const result = await client.getSeatAvailability(trainNumber, from, to, date || "", cls);
-      return result;
-    },
-    []
-  );
+    // Create a streaming message placeholder
+    const streamMsgId = `msg-stream-${Date.now()}`;
+    streamingMsgId.current = streamMsgId;
+    const streamMsg: Message = {
+      id: streamMsgId,
+      role: "assistant",
+      content: "",
+      streaming: true,
+      timestamp: Date.now(),
+    };
+    setState((prev) => ({ ...prev, messages: [...prev.messages, streamMsg] }));
+
+    // Process with AI
+    await processWithAI(trimmed, {
+      onText: (chunk: string) => {
+        // Accumulate text into the streaming message
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const idx = messages.findIndex((m) => m.id === streamMsgId);
+          if (idx >= 0) {
+            messages[idx] = {
+              ...messages[idx],
+              content: messages[idx].content + chunk,
+              streaming: true,
+            };
+          }
+          return { ...prev, messages };
+        });
+      },
+      onToolCall: (toolName: string, _args: Record<string, unknown>) => {
+        // Show which tool is being called (subtle indicator)
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const idx = messages.findIndex((m) => m.id === streamMsgId);
+          if (idx >= 0) {
+            const toolLabel = toolName.replace(/_/g, " ");
+            messages[idx] = {
+              ...messages[idx],
+              content: messages[idx].content + `\n_→ ${toolLabel}..._`,
+              streaming: true,
+            };
+          }
+          return { ...prev, messages };
+        });
+      },
+      onComponent: (component: AIComponentType) => {
+        // Map AI component to ChatComponentType and update the message
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const idx = messages.findIndex((m) => m.id === streamMsgId);
+          if (idx >= 0) {
+            messages[idx] = {
+              ...messages[idx],
+              component: mapAIComponent(component),
+              streaming: false,
+            };
+          }
+          return { ...prev, messages };
+        });
+      },
+      onDone: (_fullContent: string, _component: string | null) => {
+        // Mark streaming as complete
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const idx = messages.findIndex((m) => m.id === streamMsgId);
+          if (idx >= 0) {
+            messages[idx] = {
+              ...messages[idx],
+              streaming: false,
+            };
+          }
+          return { ...prev, messages, isProcessing: false };
+        });
+        streamingMsgId.current = null;
+      },
+      onError: (error: string) => {
+        // Show error in the streaming message
+        setState((prev) => {
+          const messages = [...prev.messages];
+          const idx = messages.findIndex((m) => m.id === streamMsgId);
+          if (idx >= 0) {
+            messages[idx] = {
+              ...messages[idx],
+              content: `I encountered an error: ${error}. Please try again or rephrase your request.`,
+              streaming: false,
+            };
+          } else {
+            // Fallback: add error message
+            messages.push({
+              id: `msg-error-${Date.now()}`,
+              role: "assistant",
+              content: `I encountered an error: ${error}. Please try again.`,
+              component: "text",
+              timestamp: Date.now(),
+            });
+          }
+          return { ...prev, messages, isProcessing: false };
+        });
+        streamingMsgId.current = null;
+      },
+    });
+  }, [mapAIComponent]);
 
   return (
-    <BookingContext.Provider
-      value={{
-        state,
-        setStep,
-        setQuery,
-        setTrains,
-        selectTrain,
-        setSelectedCoach,
-        setSelectedSeat,
-        setSeatRecommendation,
-        confirmBooking,
-        resetBooking,
-        updateState: setState,
-        fetchTrains,
-        fetchPNR,
-        searchStations,
-        fetchLiveStatus,
-        fetchAvailability,
-      }}
-    >
+    <BookingContext.Provider value={{
+      state, setStep, setQuery, selectTrain,
+      setSelectedCoach, setSelectedSeat, setSeatRecommendation,
+      confirmBooking, resetBooking, addMessage, clearMessages,
+      processUserInput, checkRapiConnection,
+      updateLastMessage, mapAIComponent,
+    }}>
       {children}
     </BookingContext.Provider>
   );
