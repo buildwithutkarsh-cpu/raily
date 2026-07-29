@@ -1,59 +1,51 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Ticket, Train, ArrowRight } from "lucide-react";
+import { getStoredRecentBookings } from "@/lib/booking-store";
 
-/* ─── Mock Bookings ────────────────────────────────────────── */
+interface BookingEntry {
+  pnr: string;
+  trainName: string;
+  trainNumber: string;
+  from: string;
+  to: string;
+  date: string;
+  time: string;
+  status: string;
+  timestamp: string;
+}
 
-const MOCK_BOOKINGS = [
-  {
-    pnr: "4681234567",
-    trainName: "Rajdhani Express",
-    trainNumber: "12951",
-    from: "NDLS",
-    to: "JP",
-    date: "28 Jul 2026",
-    departure: "06:25",
-    arrival: "11:50",
-    class: "3A",
-    fare: 1940,
-    status: "Confirmed" as const,
-  },
-  {
-    pnr: "6249876543",
-    trainName: "Shatabdi Express",
-    trainNumber: "12015",
-    from: "NDLS",
-    to: "CDG",
-    date: "15 Jul 2026",
-    departure: "07:40",
-    arrival: "10:50",
-    class: "CC",
-    fare: 890,
-    status: "Completed" as const,
-  },
-  {
-    pnr: "8123456789",
-    trainName: "Garib Rath",
-    trainNumber: "12215",
-    from: "NDLS",
-    to: "BCT",
-    date: "02 Jul 2026",
-    departure: "14:25",
-    arrival: "06:15",
-    class: "3A",
-    fare: 740,
-    status: "Completed" as const,
-  },
-];
+/* ─── Empty State ──────────────────────────────────────────── */
+
+function EmptyState() {
+  return (
+    <div className="border border-[var(--border)] p-6 text-center">
+      <div className="w-8 h-8 mx-auto mb-3 flex items-center justify-center bg-[var(--fg)]">
+        <Ticket className="h-4 w-4 text-[var(--bg)]" />
+      </div>
+      <p className="text-sm font-medium mb-1">No bookings yet</p>
+      <p className="text-[11px] text-[var(--muted)]">
+        Book a train journey to see it here
+      </p>
+    </div>
+  );
+}
 
 export default function BookingHistory() {
   const [selected, setSelected] = useState<string | null>(null);
+  const [bookings, setBookings] = useState<BookingEntry[]>([]);
+
+  useEffect(() => {
+    setBookings(getStoredRecentBookings());
+  }, []);
+
+  if (bookings.length === 0) return <EmptyState />;
 
   return (
     <div className="space-y-2">
-      {MOCK_BOOKINGS.map((booking, i) => (
+      {bookings.map((booking, i) => (
         <motion.div
           key={booking.pnr}
           initial={{ opacity: 0, y: 4 }}
@@ -75,7 +67,7 @@ export default function BookingHistory() {
               </div>
               <span
                 className={`text-[9px] px-1.5 py-0.5 font-mono uppercase tracking-[0.1em] ${
-                  booking.status === "Confirmed"
+                  booking.status === "CONFIRMED"
                     ? "bg-[var(--fg)] text-[var(--bg)]"
                     : "border border-[var(--border)] text-[var(--muted)]"
                 }`}
@@ -85,15 +77,11 @@ export default function BookingHistory() {
             </div>
 
             <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
-              <span className="font-mono">{booking.departure}</span>
-              <Train className="h-3 w-3" />
-              <span className="font-mono">{booking.arrival}</span>
+              <span className="font-mono">{booking.time}</span>
               <span className="mx-1">·</span>
               <span>{booking.from}</span>
               <ArrowRight className="h-3 w-3" />
               <span>{booking.to}</span>
-              <span className="mx-1">·</span>
-              <span className="font-mono">₹{booking.fare}</span>
             </div>
           </div>
 
@@ -105,12 +93,12 @@ export default function BookingHistory() {
               className="border-t border-[var(--border)] px-3 py-2.5 space-y-1"
             >
               <p className="text-[11px] text-[var(--muted)] font-mono">
-                PNR: {booking.pnr} · {booking.class} · {booking.date}
+                PNR: {booking.pnr} · {booking.date}
               </p>
               <p className="text-[11px] text-[var(--muted)]">
-                {booking.status === "Confirmed"
+                {booking.status === "CONFIRMED"
                   ? "Your journey is confirmed. Check PNR for real-time status."
-                  : "Journey completed successfully."}
+                  : "Booking recorded successfully."}
               </p>
             </motion.div>
           )}

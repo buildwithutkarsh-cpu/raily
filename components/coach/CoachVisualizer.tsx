@@ -1,12 +1,40 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   useBooking,
   createAssistantMessage,
 } from "@/lib/booking-store";
 import { Check, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
+
+/* ─── Seeded PRNG ──────────────────────────────────────────── */
+
+/** Simple hash a string into a 32-bit integer */
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h = ((h << 5) - h) + c;
+    h |= 0; // convert to 32-bit int
+  }
+  return Math.abs(h);
+}
+
+/** Mulberry32 — a fast, high-quality seeded PRNG returning values in [0, 1) */
+function mulberry32(a: number): () => number {
+  return () => {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/** Create a seeded random function from a seed string */
+function seedRandom(seed: string): () => number {
+  return mulberry32(hashStr(seed || "default"));
+}
 
 /* ─── Seat Status ──────────────────────────────────────────── */
 
@@ -26,17 +54,18 @@ interface Berth {
 
 /* ─── Generate Coach Layout ────────────────────────────────── */
 
-function generateCoach(trainClass: string, fare: number): Berth[] {
+function generateCoach(trainClass: string, fare: number, seed: string): Berth[] {
   const bays = 6;
   const tiers = ["lower", "middle", "upper"] as const;
   const berths: Berth[] = [];
   let seatNum = 1;
+  const rand = seedRandom(seed);
 
   for (let b = 0; b < bays; b++) {
     const seats: Seat[] = [];
     for (let t = 0; t < 3; t++) {
       const id = `B1-${seatNum}${tiers[t].charAt(0).toUpperCase()}`;
-      const isBooked = Math.random() > 0.55;
+      const isBooked = rand() > 0.55;
       seats.push({
         id,
         number: seatNum,
@@ -77,7 +106,7 @@ export default function CoachVisualizer() {
   const classType = train?.classType || "3A";
   const coachName = `B${coachIndex + 1}`;
 
-  const berths = useMemo(() => generateCoach(classType, fare), [classType, fare]);
+  const berths = useMemo(() => generateCoach(classType, fare, `${train?.number || ''}-${state.query?.date || ''}`), [classType, fare, train?.number, state.query?.date]);
 
   const allSeats = useMemo(() => berths.flatMap((b) => b.seats), [berths]);
   const availableCount = allSeats.filter((s) => s.status === "available").length;
