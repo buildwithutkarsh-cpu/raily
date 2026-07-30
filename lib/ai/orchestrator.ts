@@ -1,32 +1,43 @@
 /* ══════════════════════════════════════════════════════════════
-   Raily AI — Orchestration Layer
-   
-   The central intelligence that replaces the old regex-based
-   processUserInput. Handles intent detection, tool calling,
-   streaming, and response generation through the LLM.
-   
+   Raily AI — Orchestration Layer (Deterministic Pipeline)
+
+   The request lifecycle is an explicit finite state machine.
+   Every transition is validated. No implicit state.
+   Every request terminates in exactly one state:
+     COMPLETE | ERROR | CANCELLED | TIMEOUT
+
    Flow:
-   User Input → Build Messages → Streaming LLM Call →
-   Tool Execution → Second LLM Call → Response + UI Components
+   IDLE → REQUEST_RECEIVED → BUILD_CONTEXT → CALL_PROVIDER →
+   STREAMING → (optional TOOL_CALL_DETECTED → EXECUTE_TOOL →
+   WAIT_FOR_TOOL_RESULT → SECOND_LLM_PASS) → PARSE_RESPONSE →
+   EMIT_FRONTEND_EVENTS → FINAL_RESPONSE_READY → COMPLETE
    ══════════════════════════════════════════════════════════════ */
 
-import { createStreamingCompletion, createCompletion } from "./provider";
+import { createStreamingCompletion, createCompletion, createStreamAccumulator } from "./provider";
 import { executeTool, RAILWAY_TOOLS, buildToolResultMessage } from "./tools";
 import { buildMessages, parseAIResponse } from "./prompts";
 import { getConversationMemory, resetConversationMemory } from "./memory";
-import type { AIMessage, AIToolCall, AIComponentType, ConversationSummary, ToolResult } from "./types";
-import { AI_COMPONENT_TRIGGERS } from "./types";
+import { OrchestrationScope, createLogger } from "./request-state";
+import type {
+  AIMessage,
+  AIToolCall,
+  AIComponentType,
+  RequestId,
+  BrowserEvent,
+  ToolResult,
+} from "./types";
+import { AI_COMPONENT_TRIGGERS, RequestState } from "./types";
 
-/* ─── Stream Callback Types ──────────────────────────────── */
+/* ─── Orchestration Callbacks ────────────────────────────── */
 
 export interface OrchestrationCallbacks {
-  onText: (text: string) => void;
-  onToolCall: (toolName: string, args: Record<string, unknown>) => void;
-  /** Fires after each tool executes, with the tool's standardized result */
-  onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult) => void;
-  onComponent: (component: AIComponentType, data?: Record<string, unknown>) => void;
-  onDone: (fullContent: string, component: string | null) => void;
-  onError: (error: string) => void;
+  onText: (text: string, requestId: RequestId) => void;
+  onToolCall: (toolName: string, args: Record<string, unknown>, requestId: RequestId) => void;
+  onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult, requestId: RequestId) => void;
+  onComponent: (component: AIComponentType, requestId: RequestId) => void;
+  onDone: (fullContent: string, component: string | null, requestId: RequestId) => void;
+  onError: (error: string, requestId: RequestId) => void;
+  onEvents: (events: BrowserEvent[], requestId: RequestId) => void;
 }
 
 /* ─── Tool Execution + Second Pass ───────────────────────── */
@@ -35,9 +46,24 @@ async function executeToolCallsAndRespond(
   toolCalls: AIToolCall[],
   messages: AIMessage[],
   callbacks: OrchestrationCallbacks,
+  scope: OrchestrationScope,
   initialContent = ""
 ): Promise<{ content: string; component: string | null }> {
+  const { machine, requestId, log } = scope;
   const memory = getConversationMemory();
+
+  // ── Transition to TOOL_CALL_DETECTED ──────────────────────
+  if (!machine.isTerminated) {
+    scope.safeTransition(RequestState.TOOL_CALL_DETECTED);
+  }
+  if (machine.isTerminated) return { content: initialContent, component: null };
+
+  // ── EXECUTE_TOOL state ───────────────────────────────────
+  scope.safeTransition(RequestState.EXECUTE_TOOL);
+  if (machine.isTerminated) return { content: initialContent, component: null };
+
+  // Collect all browser events from tools for validation
+  const pendingEvents: BrowserEvent[] = [];
 
   // Execute all tools in parallel
   const results = await Promise.all(
@@ -45,26 +71,42 @@ async function executeToolCallsAndRespond(
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(tc.function.arguments);
-      } catch {
+      } catch (err: unknown) {
+        log.error(`Failed to parse arguments for tool ${tc.function.name}: ${err instanceof Error ? err.message : String(err)}`);
         args = {};
       }
 
-      callbacks.onToolCall(tc.function.name, args);
+      callbacks.onToolCall(tc.function.name, args, requestId);
 
-      const result = await executeTool(tc.function.name, args, tc.id);
+      // ── WAIT_FOR_TOOL_RESULT (per tool) ──────────────────
+      scope.safeTransition(RequestState.WAIT_FOR_TOOL_RESULT);
+
+      // Execute tool with requestId for correlated logging
+      const result = await executeTool(tc.function.name, args, tc.id, requestId);
+
       memory.addToolEntry(result);
 
-      // Fire onToolResult so callers (e.g. booking store) can sync state based on tool success
-      if (callbacks.onToolResult) {
-        callbacks.onToolResult(tc.function.name, args, result);
+      // Collect browser events from the tool's result
+      if (result.events && result.events.length > 0) {
+        pendingEvents.push(...validateEvents(result.events, tc.function.name, log));
       }
+
+      // Fire onToolResult so callers (e.g. booking store) can sync state
+      callbacks.onToolResult(tc.function.name, args, result, requestId);
 
       return buildToolResultMessage(tc.id, tc.function.name, result);
     })
   );
 
+  // ── EMIT_FRONTEND_EVENTS (for tool-triggered browser actions) ──
+  if (pendingEvents.length > 0) {
+    const eventTypes = pendingEvents.map(e => e.type).join(", ");
+    log.info(`Emitting ${pendingEvents.length} browser events: [${eventTypes}]`);
+    callbacks.onEvents(pendingEvents, requestId);
+    log.info(`Browser events emitted, second LLM pass will NOT wait for them`);
+  }
+
   // Add assistant message with tool calls to the messages array
-  // Include the initial reasoning text so the LLM sees its own thoughts
   messages.push({
     role: "assistant",
     content: initialContent,
@@ -81,8 +123,16 @@ async function executeToolCallsAndRespond(
     });
   }
 
+  // ── SECOND_LLM_PASS state ────────────────────────────────
+  scope.safeTransition(RequestState.SECOND_LLM_PASS);
+  if (machine.isTerminated) return { content: initialContent, component: null };
+
   // Second pass: get LLM response with tool results
-  const secondResponse = await createCompletion(messages, []);
+  const secondResponse = await createCompletion(messages, [], requestId);
+
+  // ── PARSE_RESPONSE state ─────────────────────────────────
+  scope.safeTransition(RequestState.PARSE_RESPONSE);
+  if (machine.isTerminated) return { content: initialContent, component: null };
 
   const parsed = parseAIResponse(secondResponse.content);
   const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
@@ -93,17 +143,96 @@ async function executeToolCallsAndRespond(
   // Store the final response
   memory.addAssistantEntry(parsed.text);
 
-  // Stream the response text (not the initial reasoning — it was already streamed)
-  callbacks.onText(parsed.text);
+  // ── FINAL_RESPONSE_READY / EMIT_FRONTEND_EVENTS ──────────
+  scope.safeTransition(RequestState.FINAL_RESPONSE_READY);
+
+  // Stream the response text
+  callbacks.onText(parsed.text, requestId);
 
   // Trigger UI component if needed
   if (component) {
-    callbacks.onComponent(component as AIComponentType);
+    callbacks.onComponent(component as AIComponentType, requestId);
   }
 
-  callbacks.onDone(combinedContent, component);
+  // Final done callback
+  callbacks.onDone(combinedContent, component, requestId);
+
+  // Transition to COMPLETE
+  scope.safeTransition(RequestState.COMPLETE);
 
   return { content: combinedContent, component };
+}
+
+/* ─── Event Validation ──────────────────────────────────── */
+
+function validateEvents(
+  events: BrowserEvent[],
+  toolName: string,
+  log: ReturnType<typeof createLogger>
+): BrowserEvent[] {
+  const valid: BrowserEvent[] = [];
+  const seenEventIds = new Set<string>();
+
+  for (const event of events) {
+    if (!event.type) {
+      log.warn(`Tool ${toolName} returned event without type — skipping`);
+      continue;
+    }
+
+    if (!event.eventId) {
+      log.warn(`Tool ${toolName} returned event without eventId — skipping`);
+      continue;
+    }
+
+    if (seenEventIds.has(event.eventId)) {
+      log.warn(`Duplicate eventId ${event.eventId} from tool ${toolName} — skipping`);
+      continue;
+    }
+
+    switch (event.type) {
+      case "download-pdf": {
+        const dl = event as unknown as { url: unknown; filename: unknown };
+        if (!dl.url || typeof dl.url !== "string") {
+          log.warn(`Tool ${toolName} download-pdf event without valid url — skipping`);
+          continue;
+        }
+        if (!dl.filename || typeof dl.filename !== "string") {
+          log.warn(`Tool ${toolName} download-pdf event without valid filename — skipping`);
+          continue;
+        }
+        break;
+      }
+      case "navigate": {
+        const nav = event as unknown as { url: unknown };
+        if (!nav.url || typeof nav.url !== "string") {
+          log.warn(`Tool ${toolName} navigate event without valid url — skipping`);
+          continue;
+        }
+        break;
+      }
+      case "scroll-to":
+      case "focus": {
+        const sel = event as unknown as { selector: unknown };
+        if (!sel.selector || typeof sel.selector !== "string") {
+          log.warn(`Tool ${toolName} ${event.type} event without valid selector — skipping`);
+          continue;
+        }
+        break;
+      }
+      default:
+        log.warn(`Tool ${toolName} unknown event type: ${(event as BrowserEvent).type} — skipping`);
+        continue;
+    }
+
+    seenEventIds.add(event.eventId);
+    valid.push(event);
+  }
+
+  if (valid.length !== events.length) {
+    log.warn(`Tool ${toolName}: ${events.length - valid.length}/${events.length} events filtered by validation`);
+  }
+
+  return valid;
 }
 
 /* ─── Main Orchestration ─────────────────────────────────── */
@@ -112,67 +241,107 @@ export async function processWithAI(
   userInput: string,
   callbacks: OrchestrationCallbacks
 ): Promise<void> {
-  const memory = getConversationMemory();
-  const summary = memory.getSummary() ?? undefined;
+  // ── Create orchestration scope with state machine ─────────
+  const scope = OrchestrationScope.create(60_000);
+  const { machine, log, requestId } = scope;
 
-  // Store user input
-  memory.addUserEntry(userInput);
+  log.info(`processWithAI called with input: "${userInput.slice(0, 100)}"`);
 
-  // Build messages
-  const messages = buildMessages(userInput, memory.getEntries(), summary);
-
-  // ── PHASE 1: Streaming LLM Pass ─────────────────────────
-  // Accumulators populated by streaming callbacks
-  let accumulatedContent = "";
-  let accumulatedToolCalls: AIToolCall[] = [];
-  let hadError = false;
-
-  await createStreamingCompletion(
-    messages,
-    RAILWAY_TOOLS,
-    {
-      onText: (text: string) => {
-        accumulatedContent += text;
-        callbacks.onText(text);
-      },
-      onToolCall: (_toolCall: AIToolCall) => {
-        // Tool calls are accumulated inside createStreamingCompletion
-        // and passed via onDone — no action needed here
-      },
-      onDone: (fullContent: string, toolCalls: AIToolCall[]) => {
-        // Synchronously capture the final state from the stream.
-        // Tool execution and second LLM pass are handled AFTER
-        // createStreamingCompletion resolves, so they are properly awaited.
-        accumulatedContent = fullContent;
-        accumulatedToolCalls = toolCalls;
-      },
-      onError: (error: Error) => {
-        hadError = true;
-        callbacks.onError(error.message);
-      },
-    }
-  );
-
-  // If the stream encountered an error, don't proceed with tool execution
-  if (hadError) return;
-
-  // ── PHASE 2: Tool Execution + Second LLM Pass ───────────
-  // This runs AFTER createStreamingCompletion has fully resolved,
-  // so processWithAI's promise does NOT resolve until everything is done.
-
-  if (accumulatedToolCalls.length > 0) {
-    try {
-      await executeToolCallsAndRespond(accumulatedToolCalls, messages, callbacks, accumulatedContent);
-    } catch (err: unknown) {
-      callbacks.onError(
-        err instanceof Error ? err.message : "Tool execution failed unexpectedly"
-      );
-    }
-    return;
-  }
-
-  // ── PHASE 3: No Tool Calls — Parse Directly ─────────────
   try {
+    const memory = getConversationMemory();
+    const summary = memory.getSummary() ?? undefined;
+
+    // Store user input
+    memory.addUserEntry(userInput);
+
+    // ── BUILD_CONTEXT state ─────────────────────────────────
+    const messagesResult = await scope.runInState(RequestState.BUILD_CONTEXT, async () => {
+      return buildMessages(userInput, memory.getEntries(), summary);
+    });
+
+    if (machine.isTerminated || !messagesResult) {
+      callbacks.onError(
+        machine.currentState === RequestState.TIMEOUT
+          ? "Request timed out while building context"
+          : machine.currentState === RequestState.CANCELLED
+          ? "Request cancelled"
+          : "Request failed while building context",
+        requestId
+      );
+      return;
+    }
+
+    const builtMessages = messagesResult as AIMessage[];
+
+    // ── CALL_PROVIDER state ─────────────────────────────────
+    scope.safeTransition(RequestState.CALL_PROVIDER);
+    if (machine.isTerminated) return;
+
+    // ── STREAMING state ─────────────────────────────────────
+    // Use the accumulator pattern so we can read tool calls after streaming completes
+    const accumulator = createStreamAccumulator();
+    let streamingError: string | null = null;
+
+    await createStreamingCompletion(
+      builtMessages,
+      RAILWAY_TOOLS,
+      {
+        onStart: () => {
+          scope.safeTransition(RequestState.STREAMING);
+        },
+        onChunk: (text: string, chunkRequestId: RequestId) => {
+          callbacks.onText(text, chunkRequestId || requestId);
+        },
+        onToolCall: (_toolCall: AIToolCall, _tcRequestId: RequestId) => {
+          // Tool calls are accumulated in the accumulator via createStreamingCompletion
+        },
+        onDone: (_fullContent: string, _doneRequestId: RequestId) => {
+          // The accumulator is populated with final content and tool calls
+        },
+        onError: (error: Error, errRequestId: RequestId) => {
+          streamingError = error.message;
+          log.error(`Streaming error: ${error.message} (${errRequestId})`);
+        },
+        cleanup: () => {
+          log.info("Stream cleanup complete");
+        },
+      },
+      requestId,
+      accumulator
+    );
+
+    if (streamingError) {
+      callbacks.onError(streamingError, requestId);
+      return;
+    }
+
+    // Read final states from the accumulator
+    const accumulatedContent = accumulator.fullContent;
+    const accumulatedToolCalls = accumulator.toolCalls;
+
+    log.info(`Stream completed: ${accumulatedContent.length} chars, ${accumulatedToolCalls.length} tool calls`);
+
+    // ── PHASE 2: Tool execution (if tool calls were detected) ──
+    if (accumulatedToolCalls.length > 0) {
+      try {
+        await executeToolCallsAndRespond(
+          accumulatedToolCalls,
+          builtMessages,
+          callbacks,
+          scope,
+          accumulatedContent
+        );
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Tool execution failed unexpectedly";
+        callbacks.onError(message, requestId);
+      }
+      return;
+    }
+
+    // ── PHASE 3: No tool calls — parse and respond directly ──
+    scope.safeTransition(RequestState.PARSE_RESPONSE);
+    if (machine.isTerminated) return;
+
     const parsed = parseAIResponse(accumulatedContent);
     const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
 
@@ -181,14 +350,28 @@ export async function processWithAI(
 
     // Trigger UI component if needed
     if (component) {
-      callbacks.onComponent(component as AIComponentType);
+      callbacks.onComponent(component as AIComponentType, requestId);
     }
 
-    callbacks.onDone(parsed.text, component);
+    // Final done
+    scope.safeTransition(RequestState.FINAL_RESPONSE_READY);
+    callbacks.onDone(parsed.text, component, requestId);
+
+    // Complete
+    scope.safeTransition(RequestState.COMPLETE);
+
   } catch (err: unknown) {
-    callbacks.onError(
-      err instanceof Error ? err.message : "Failed to process AI response"
-    );
+    const message = err instanceof Error ? err.message : "Unexpected pipeline error";
+    log.error(`Unhandled pipeline error: ${message}`);
+
+    if (!machine.isTerminated) {
+      machine.forceTerminate(RequestState.ERROR, message);
+    }
+
+    callbacks.onError(message, requestId);
+  } finally {
+    // Always dispose the state machine (logs final state + history)
+    machine.dispose();
   }
 }
 
@@ -201,66 +384,114 @@ export async function processWithAISimple(
   component: string | null;
   toolCalls: AIToolCall[];
 }> {
-  const memory = getConversationMemory();
-  const summary = memory.getSummary() ?? undefined;
+  const scope = OrchestrationScope.create(30_000);
+  const { machine, log, requestId } = scope;
 
-  // Store user input
-  memory.addUserEntry(userInput);
+  log.info(`processWithAISimple called`);
 
-  // Build messages
-  const messages = buildMessages(userInput, memory.getEntries(), summary);
+  try {
+    const memory = getConversationMemory();
+    const summary = memory.getSummary() ?? undefined;
 
-  // First pass: get LLM response
-  const firstResponse = await createCompletion(messages, RAILWAY_TOOLS);
+    memory.addUserEntry(userInput);
 
-  // If there are tool calls, execute them
-  if (firstResponse.toolCalls.length > 0) {
-    const toolResults = [];
-    for (const tc of firstResponse.toolCalls) {
-      let args: Record<string, unknown> = {};
-      try {
-        args = JSON.parse(tc.function.arguments);
-      } catch {
-        args = {};
-      }
+    // BUILD_CONTEXT
+    const messagesResult = await scope.runInState(RequestState.BUILD_CONTEXT, async () => {
+      return buildMessages(userInput, memory.getEntries(), summary);
+    });
 
-      const result = await executeTool(tc.function.name, args, tc.id);
-      memory.addToolEntry(result);
-      toolResults.push(buildToolResultMessage(tc.id, tc.function.name, result));
+    if (machine.isTerminated || !messagesResult) {
+      return { content: "Request failed", component: null, toolCalls: [] };
     }
 
-    // Build second pass messages
-    const secondMessages: AIMessage[] = [
-      ...messages,
-      { role: "assistant", content: "", tool_calls: firstResponse.toolCalls },
-      ...toolResults,
-    ];
+    const builtMessages = messagesResult as AIMessage[];
 
-    // Second pass
-    const secondResponse = await createCompletion(secondMessages, []);
-    const parsed = parseAIResponse(secondResponse.content);
+    // CALL_PROVIDER
+    const firstResponse = await scope.runInState(RequestState.CALL_PROVIDER, async () => {
+      return createCompletion(builtMessages, RAILWAY_TOOLS, requestId);
+    });
+
+    if (machine.isTerminated || !firstResponse) {
+      return { content: "Request failed", component: null, toolCalls: [] };
+    }
+
+    // TOOL_CALL_DETECTED → EXECUTE_TOOL → SECOND_LLM_PASS
+    if (firstResponse.toolCalls.length > 0) {
+      scope.safeTransition(RequestState.TOOL_CALL_DETECTED);
+
+      const toolResults: AIMessage[] = [];
+      const pendingEvents: BrowserEvent[] = [];
+
+      for (const tc of firstResponse.toolCalls) {
+        scope.safeTransition(RequestState.EXECUTE_TOOL);
+
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(tc.function.arguments);
+        } catch (err: unknown) {
+          log.error(`Failed to parse args for ${tc.function.name}: ${err instanceof Error ? err.message : String(err)}`);
+          args = {};
+        }
+
+        scope.safeTransition(RequestState.WAIT_FOR_TOOL_RESULT);
+
+        const result = await executeTool(tc.function.name, args, tc.id, requestId);
+        memory.addToolEntry(result);
+
+        if (result.events && result.events.length > 0) {
+          pendingEvents.push(...result.events);
+        }
+
+        toolResults.push(buildToolResultMessage(tc.id, tc.function.name, result));
+      }
+
+      // SECOND_LLM_PASS
+      const secondMessages: AIMessage[] = [
+        ...builtMessages,
+        { role: "assistant", content: "", tool_calls: firstResponse.toolCalls },
+        ...toolResults,
+      ];
+
+      const secondResponse = await scope.runInState(RequestState.SECOND_LLM_PASS, async () => {
+        return createCompletion(secondMessages, [], requestId);
+      });
+
+      if (machine.isTerminated || !secondResponse) {
+        return { content: "Request failed", component: null, toolCalls: firstResponse.toolCalls };
+      }
+
+      const parsed = parseAIResponse(secondResponse.content);
+      const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
+
+      memory.addAssistantEntry(parsed.text);
+
+      scope.safeTransition(RequestState.COMPLETE);
+
+      return { content: parsed.text, component, toolCalls: firstResponse.toolCalls };
+    }
+
+    // No tool calls — return directly
+    const parsed = parseAIResponse(firstResponse.content);
     const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
 
     memory.addAssistantEntry(parsed.text);
 
-    return {
-      content: parsed.text,
-      component,
-      toolCalls: firstResponse.toolCalls,
-    };
+    scope.safeTransition(RequestState.COMPLETE);
+
+    return { content: parsed.text, component, toolCalls: [] };
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unexpected error in processWithAISimple";
+    log.error(message);
+
+    if (!machine.isTerminated) {
+      machine.forceTerminate(RequestState.ERROR, message);
+    }
+
+    return { content: `Error: ${message}`, component: null, toolCalls: [] };
+  } finally {
+    machine.dispose();
   }
-
-  // No tool calls — return directly
-  const parsed = parseAIResponse(firstResponse.content);
-  const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
-
-  memory.addAssistantEntry(parsed.text);
-
-  return {
-    content: parsed.text,
-    component,
-    toolCalls: [],
-  };
 }
 
 /* ─── Reset Conversation ─────────────────────────────────── */

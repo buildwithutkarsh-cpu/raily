@@ -4,16 +4,23 @@
    Calls our own /api/ai/chat endpoint instead of calling
    AI providers directly. API keys remain server-side only.
    
-   Supported providers (configurable server-side in .env.local):
-   - Groq (default)
-   - OpenRouter (fallback)
+   Streaming Contract (guaranteed):
+   1 onStart() at the beginning
+   0+ onChunk() calls for text
+   0+ onToolCall() calls
+   0+ onToolResult() calls
+   Exactly 1 onDone() OR exactly 1 onError()
+   Exactly 1 cleanup() at the end
    ══════════════════════════════════════════════════════════════ */
 
 import type {
   AIMessage,
   AIToolCall,
   AIToolDefinition,
+  RequestId,
+  StreamCallbacks,
 } from "./types";
+import { createLogger } from "./request-state";
 
 /* ─── Error Classes ───────────────────────────────────────── */
 
@@ -52,11 +59,15 @@ function getApiUrl(): string {
 
 export async function createCompletion(
   messages: AIMessage[],
-  tools: AIToolDefinition[] = []
+  tools: AIToolDefinition[] = [],
+  requestId?: RequestId
 ): Promise<{
   content: string;
   toolCalls: AIToolCall[];
 }> {
+  const log = requestId ? createLogger(requestId) : null;
+  log?.info(`createCompletion: ${messages.length} messages, ${tools.length} tools`);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
@@ -68,6 +79,7 @@ export async function createCompletion(
         messages,
         tools: tools.length > 0 ? tools : undefined,
         stream: false,
+        _requestId: requestId, // Pass through for server-side logging
       }),
       signal: controller.signal,
     });
@@ -86,6 +98,8 @@ export async function createCompletion(
       throw new AIProviderError(message, code, response.status);
     }
 
+    log?.info(`createCompletion done: ${body?.data?.content?.length || 0} chars, ${body?.data?.toolCalls?.length || 0} tool calls`);
+
     return {
       content: body?.data?.content || "",
       toolCalls: body?.data?.toolCalls || [],
@@ -93,7 +107,11 @@ export async function createCompletion(
   } catch (err: unknown) {
     clearTimeout(timeout);
     if (err instanceof AIProviderError) throw err;
-    if (err instanceof Error && err.name === "AbortError") throw new AITimeoutError();
+    if (err instanceof Error && err.name === "AbortError") {
+      log?.error("createCompletion timed out");
+      throw new AITimeoutError();
+    }
+    log?.error(`createCompletion failed: ${err instanceof Error ? err.message : String(err)}`);
     throw new AIProviderError(
       err instanceof Error ? err.message : "AI request failed",
       "AI_REQUEST_FAILED"
@@ -101,22 +119,92 @@ export async function createCompletion(
   }
 }
 
-/* ─── Streaming Completion ───────────────────────────────── */
+/* ─── Streaming Completion (Guaranteed Contract) ─────────── */
+
+/**
+ * Guaranteed streaming lifecycle (every callback fires as specified):
+ *
+ *   onStart() — exactly once, before any other callback
+ *   onChunk() — 0+ times for text deltas
+ *   onToolCall() — 0+ times as tool calls are finalized
+ *   onDone() — exactly once when the stream completes successfully
+ *     OR
+ *   onError() — exactly once when an error occurs
+ *   cleanup() — exactly once, after onDone/onError
+ *
+ * No callback fires twice. If the stream is aborted/cancelled,
+ * onError fires once and the function returns.
+ */
+export interface StreamAccumulator {
+  /** Final accumulated text content */
+  fullContent: string;
+  /** Final accumulated tool calls */
+  toolCalls: AIToolCall[];
+}
+
+/**
+ * Default empty accumulator — the provider mutates this object
+ * so the caller can read the final state after the function completes.
+ */
+export function createStreamAccumulator(): StreamAccumulator {
+  return { fullContent: "", toolCalls: [] };
+}
 
 export async function createStreamingCompletion(
   messages: AIMessage[],
   tools: AIToolDefinition[] = [],
-  callbacks: {
-    onText: (text: string) => void;
-    onToolCall: (toolCall: AIToolCall) => void;
-    onDone: (fullContent: string, toolCalls: AIToolCall[]) => void;
-    onError: (error: Error) => void;
-  }
+  callbacks: Partial<StreamCallbacks>,
+  requestId?: RequestId,
+  /**
+   * Mutable accumulator that receives the final content and tool calls.
+   * The caller can read this after the promise resolves.
+   */
+  accumulator?: StreamAccumulator
 ): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const log = requestId ? createLogger(requestId) : null;
+  let cleanupCalled = false;
+  let completedOrErrored = false;
+
+  // Guard to ensure cleanup fires exactly once
+  const safeCleanup = () => {
+    if (cleanupCalled) return;
+    cleanupCalled = true;
+    try {
+      callbacks.cleanup?.();
+    } catch (err: unknown) {
+      // cleanup must never throw
+      log?.error(`cleanup callback threw: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  // Guard to ensure onDone/onError fires exactly once
+  const safeComplete = (type: "done" | "error", ...args: unknown[]) => {
+    if (completedOrErrored) {
+      log?.warn(`Stream already ${completedOrErrored ? "completed" : "errored"} — ignoring duplicate ${type}`);
+      return;
+    }
+    completedOrErrored = true;
+
+    try {
+      if (type === "done") {
+        callbacks.onDone?.(args[0] as string, requestId || "");
+      } else {
+        callbacks.onError?.(args[0] as Error, requestId || "");
+      }
+    } finally {
+      safeCleanup();
+    }
+  };
 
   try {
+    // ── 1. Fire onStart ────────────────────────────────────
+    callbacks.onStart?.();
+    log?.info("createStreamingCompletion: onStart fired");
+
+    // ── 2. Prepare fetch ───────────────────────────────────
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60_000);
+
     const response = await fetch(getApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -124,35 +212,38 @@ export async function createStreamingCompletion(
         messages,
         tools: tools.length > 0 ? tools : undefined,
         stream: true,
+        _requestId: requestId,
       }),
       signal: controller.signal,
     });
 
     clearTimeout(timeout);
 
+    // Handle non-200 status codes
     if (response.status === 429) {
-      const retryAfter = parseInt(
-        response.headers.get("Retry-After") || "30"
-      );
-      callbacks.onError(new AIRateLimitError(retryAfter));
+      const retryAfter = parseInt(response.headers.get("Retry-After") || "30");
+      safeComplete("error", new AIRateLimitError(retryAfter));
       return;
     }
 
     if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      callbacks.onError(
-        new AIProviderError(
-          body?.error?.message || `AI request failed (${response.status})`,
-          body?.error?.code || "AI_REQUEST_FAILED",
-          response.status
-        )
+      let errorMessage = `AI request failed (${response.status})`;
+      try {
+        const body = await response.json();
+        errorMessage = body?.error?.message || errorMessage;
+      } catch {
+        // Response body is not JSON — use default message
+      }
+      safeComplete("error",
+        new AIProviderError(errorMessage, bodyErrorCode(response), response.status)
       );
       return;
     }
 
+    // ── 3. Read the stream ─────────────────────────────────
     const reader = response.body?.getReader();
     if (!reader) {
-      callbacks.onError(new AIProviderError("No response body", "AI_NO_BODY"));
+      safeComplete("error", new AIProviderError("No response body", "AI_NO_BODY"));
       return;
     }
 
@@ -160,9 +251,18 @@ export async function createStreamingCompletion(
     let fullContent = "";
     let toolCalls: AIToolCall[] = [];
     let buffer = "";
+    let streamError: Error | null = null;
 
     while (true) {
-      const { done, value } = await reader.read();
+      let readResult: ReadableStreamReadResult<Uint8Array>;
+      try {
+        readResult = await reader.read();
+      } catch (err: unknown) {
+        streamError = err instanceof Error ? err : new Error("Stream read failed");
+        break;
+      }
+
+      const { done, value } = readResult;
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -172,78 +272,112 @@ export async function createStreamingCompletion(
       for (const line of lines) {
         if (!line.trim()) continue;
 
+        let parsed: Record<string, unknown>;
         try {
-          const parsed = JSON.parse(line);
-          const type = parsed.type;
-
-          if (type === "chunk") {
-            // Forwarded SSE chunk from the provider
-            const data = parsed.data;
-            if (!data) continue;
-
-            try {
-              const chunk = JSON.parse(data);
-              const delta = chunk.choices?.[0]?.delta;
-
-              if (delta?.content) {
-                fullContent += delta.content;
-                callbacks.onText(delta.content);
-              }
-
-              if (delta?.tool_calls) {
-                for (const tc of delta.tool_calls) {
-                  const existing = toolCalls.find((t) => t.id === tc.id);
-                  if (existing) {
-                    existing.function.arguments += tc.function?.arguments || "";
-                  } else {
-                    toolCalls.push({
-                      id: tc.id,
-                      type: "function",
-                      function: {
-                        name: tc.function?.name || "",
-                        arguments: tc.function?.arguments || "",
-                      },
-                    });
-                  }
-                }
-              }
-            } catch {
-              // Skip malformed JSON chunks
-            }
-          } else if (type === "done") {
-            // Stream complete
-          } else if (type === "error") {
-            callbacks.onError(
-              new AIProviderError(
-                parsed.message || "AI stream error",
-                parsed.code || "AI_STREAM_ERROR"
-              )
-            );
-            return;
-          }
+          parsed = JSON.parse(line);
         } catch {
-          // Skip malformed lines
+          // Skip malformed JSON — log it but don't crash
+          log?.warn(`Malformed stream line (${line.slice(0, 80)})`);
+          continue;
+        }
+
+        const type = parsed.type;
+
+        if (type === "chunk") {
+          const data = parsed.data as string | undefined;
+          if (!data) continue;
+
+          let chunk: Record<string, unknown>;
+          try {
+            chunk = JSON.parse(data);
+          } catch {
+            log?.warn(`Malformed chunk data: ${(data as string)?.slice(0, 80)}`);
+            continue;
+          }
+
+          const delta = (chunk.choices as Array<Record<string, unknown>>)?.[0]?.delta as Record<string, unknown> | undefined;
+
+          if (delta?.content) {
+            const textContent = delta.content as string;
+            fullContent += textContent;
+            callbacks.onChunk?.(textContent, requestId || "");
+          }
+
+          if (delta?.tool_calls) {
+            const rawToolCalls = delta.tool_calls as Array<Record<string, unknown>>;
+            for (const tc of rawToolCalls) {
+              const tcId = tc.id as string;
+              const existing = toolCalls.find((t) => t.id === tcId);
+              if (existing) {
+                existing.function.arguments += (tc.function as Record<string, unknown>)?.arguments || "";
+              } else {
+                const fnData = tc.function as Record<string, unknown> || {};
+                toolCalls.push({
+                  id: tcId,
+                  type: "function",
+                  function: {
+                    name: (fnData.name as string) || "",
+                    arguments: (fnData.arguments as string) || "",
+                  },
+                });
+              }
+            }
+          }
+        } else if (type === "done") {
+          // Stream complete signal from server
+          // Continue reading to ensure all chunks are processed
+        } else if (type === "error") {
+          streamError = new AIProviderError(
+            (parsed.message as string) || "AI stream error",
+            (parsed.code as string) || "AI_STREAM_ERROR"
+          );
+          break;
         }
       }
+
+      if (streamError) break;
     }
 
-    // Finalize tool calls — validate JSON arguments
+    // ── 4. Handle stream error ─────────────────────────────
+    if (streamError) {
+      safeComplete("error", streamError);
+      return;
+    }
+
+    // ── 5. Finalize tool calls ────────────────────────────
     for (const tc of toolCalls) {
+      // Validate JSON arguments — recover gracefully with "{}" for invalid
       try {
         JSON.parse(tc.function.arguments);
       } catch {
+        log?.warn(`Tool call ${tc.id} (${tc.function.name}) has malformed arguments, using {}`);
         tc.function.arguments = "{}";
       }
-      callbacks.onToolCall(tc);
+      callbacks.onToolCall?.(tc, requestId || "");
     }
 
-    callbacks.onDone(fullContent, toolCalls);
+    // Populate the accumulator so the caller can read final state
+    if (accumulator) {
+      accumulator.fullContent = fullContent;
+      accumulator.toolCalls = toolCalls;
+    }
+
+    // ── 6. Fire onDone ────────────────────────────────────
+    log?.info(`createStreamingCompletion done: ${fullContent.length} chars, ${toolCalls.length} tool calls`);
+    safeComplete("done", fullContent);
+
   } catch (err: unknown) {
-    clearTimeout(timeout);
+    // Catch-all for unexpected errors (fetch failures, etc.)
+    if (completedOrErrored) {
+      log?.error(`Stream already completed but caught additional error: ${err instanceof Error ? err.message : String(err)}`);
+      safeCleanup();
+      return;
+    }
+
     if (err instanceof Error && err.name === "AbortError") {
-      callbacks.onError(new AITimeoutError());
+      safeComplete("error", new AITimeoutError());
     } else {
-      callbacks.onError(
+      safeComplete("error",
         err instanceof AIProviderError
           ? err
           : new AIProviderError(err instanceof Error ? err.message : "Streaming failed")
@@ -252,9 +386,18 @@ export async function createStreamingCompletion(
   }
 }
 
+/* ─── Helpers ──────────────────────────────────────────────── */
+
+function bodyErrorCode(response: Response): string {
+  if (response.status === 429) return "AI_RATE_LIMIT";
+  if (response.status === 408) return "AI_TIMEOUT";
+  if (response.status >= 500) return "AI_SERVER_ERROR";
+  return "AI_REQUEST_FAILED";
+}
+
 /* ─── Provider Health Check ──────────────────────────────── */
 
-export async function checkAIProviderHealth(): Promise<{
+export async function checkAIProviderHealth(requestId?: RequestId): Promise<{
   configured: boolean;
   reachable: boolean;
   provider: string;
@@ -280,7 +423,11 @@ export async function checkAIProviderHealth(): Promise<{
       latency: body?.latency,
       healthy: body?.data?.healthy ?? false,
     };
-  } catch {
+  } catch (err: unknown) {
+    if (requestId) {
+      const log = createLogger(requestId);
+      log.warn(`Health check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return { configured: false, reachable: false, provider: "unknown" };
   }
 }

@@ -47,6 +47,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# test artifacts
+test-output/
+
 # guides
 GUIDE_*.md
 Rapi/eng.traineddata

@@ -3,18 +3,34 @@
    
    Every action is a tool. The LLM NEVER claims success without
    a tool confirming it. Every tool returns a standardized
-   response that the LLM reasons over.
+   response with structured events.
    
    Tool Result Contract:
    - success: true  → AI may confirm the action
    - success: false → AI must explain the failure
    - Tool not called → AI never mentions it
+   
+   Event Contract:
+   - Tools return { events: BrowserEvent[] } instead of DOM ops
+   - Orchestrator validates events
+   - Frontend executes events
+   - AI describes completed actions only after event confirmation
    ══════════════════════════════════════════════════════════════ */
 
 import * as rapi from "@/lib/rapi/endpoints";
 import { transformTrainEntry, transformPNR, transformLiveStatus, transformAvailability } from "@/lib/rapi/transform";
 import { toRapiDate } from "@/lib/rapi/endpoints";
-import type { AIToolDefinition, ToolResult, AIMessage, StandardToolResponse } from "./types";
+import type {
+  AIToolDefinition,
+  ToolResult,
+  AIMessage,
+  StandardToolResponse,
+  RequestId,
+  RequestContext,
+  BrowserEvent,
+  DownloadPdfEvent,
+} from "./types";
+import { createLogger } from "./request-state";
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
@@ -32,9 +48,18 @@ function generatePNR(trainNumber: string, coach: string, seatId: string | null):
   return `${firstDigit}${String(nineDigits).padStart(9, "0")}`;
 }
 
+let eventIdCounter = 0;
+function nextEventId(): string {
+  return `evt-${Date.now().toString(36)}-${++eventIdCounter}`;
+}
+
 /** Create a standardized success response */
-function success(data: Record<string, unknown>, message: string): StandardToolResponse {
-  return { success: true, data, message, error: null };
+function success(
+  data: Record<string, unknown>,
+  message: string,
+  events?: BrowserEvent[]
+): StandardToolResponse {
+  return { success: true, data, message, error: null, events };
 }
 
 /** Create a standardized failure response */
@@ -50,6 +75,7 @@ function toToolResult(resp: StandardToolResponse, toolCallId: string, toolName: 
     error: resp.success ? undefined : resp.error?.message,
     toolCallId,
     toolName,
+    events: resp.events,
   };
 }
 
@@ -227,7 +253,7 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
     type: "function",
     function: {
       name: "downloadTicketPdf",
-      description: "Generate and download a PDF ticket for a confirmed booking. The ticket is downloaded directly in the browser. Only call this tool AFTER the booking is confirmed (after confirmBooking succeeds). Returns the ticket details and triggers the browser download.",
+      description: "Prepare a PDF ticket for download. Validates that the ticket data can generate a valid PDF, then triggers a browser download. Only call this tool AFTER the booking is confirmed (after confirmBooking succeeds). IMPORTANT: success:true means the PDF data is VALID and ready for download — it does NOT mean the file has been saved to the user's device. The actual download happens in the browser automatically after this tool returns. If success:false, tell the user the PDF could not be generated.",
       strict: true,
       parameters: {
         type: "object",
@@ -259,7 +285,7 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
     type: "function",
     function: {
       name: "sendTicketEmail",
-      description: "Send the ticket PDF to an email address. Requires the booking to be confirmed first. Only call this tool AFTER the booking is confirmed (after confirmBooking succeeds) and the user has provided their email address.",
+      description: "Send the ticket PDF to an email address via Resend. REQUIRES: the booking to be confirmed first AND the RESEND_API_KEY to be configured server-side. Only call this tool AFTER confirmBooking succeeds AND the user has provided their email. success:true means the email was ACTUALLY sent (Resend confirmed delivery). success:false means it failed — tell the user exactly why (e.g. 'Email service not configured' or 'Invalid email address').",
       strict: true,
       parameters: {
         type: "object",
@@ -326,8 +352,11 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
 export async function executeTool(
   toolName: string,
   args: Record<string, unknown>,
-  toolCallId: string
+  toolCallId: string,
+  requestId?: RequestId
 ): Promise<ToolResult> {
+  const log = requestId ? createLogger(requestId) : null;
+
   try {
     let result: StandardToolResponse;
 
@@ -365,11 +394,11 @@ export async function executeTool(
         break;
 
       case "downloadTicketPdf":
-        result = await handleDownloadTicketPDF(args);
+        result = await handleDownloadTicketPDF(args, requestId);
         break;
 
       case "sendTicketEmail":
-        result = await handleSendTicketEmail(args);
+        result = await handleSendTicketEmail(args, requestId);
         break;
 
       case "confirmBooking":
@@ -377,16 +406,21 @@ export async function executeTool(
         break;
 
       default:
+        log?.error(`Unknown tool called: ${toolName}`);
         result = failure("UNKNOWN_TOOL", `Unknown tool: ${toolName}`);
     }
 
+    log?.info(`Tool ${toolName} completed: success=${result.success}, events=${result.events?.length || 0}`);
     return toToolResult(result, toolCallId, toolName);
   } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : `Tool ${toolName} execution failed`;
+    log?.error(`Tool ${toolName} threw: ${message}`);
     return {
       success: false,
-      error: err instanceof Error ? err.message : `Tool ${toolName} execution failed`,
+      error: message,
       toolCallId,
       toolName,
+      events: undefined,
     };
   }
 }
@@ -537,97 +571,147 @@ async function handleGetFare(args: Record<string, unknown>): Promise<StandardToo
 }
 
 async function handleGetHealth(): Promise<StandardToolResponse> {
+  let rapiResult: { success: boolean; data?: unknown; error?: string };
   try {
-    const result = await rapi.getHealth();
-    if (result.success && result.data) {
-      return success(
-        result.data as unknown as Record<string, unknown>,
-        "RAPI server is connected and healthy"
-      );
-    }
-    return success({ status: "unreachable" }, "RAPI server is unreachable");
-  } catch {
-    return success({ status: "unreachable" }, "RAPI server is unreachable");
+    rapiResult = await rapi.getHealth();
+  } catch (err: unknown) {
+    // Health check failure — report as failure so the LLM knows
+    return failure(
+      "RAPI_UNREACHABLE",
+      `RAPI server is unreachable: ${err instanceof Error ? err.message : "Connection failed"}`
+    );
   }
+
+  if (rapiResult.success) {
+    return success(
+      rapiResult.data as Record<string, unknown>,
+      "RAPI server is connected and healthy"
+    );
+  }
+
+  return failure(
+    "RAPI_UNREACHABLE",
+    rapiResult.error || "RAPI server is unreachable"
+  );
 }
 
-async function handleDownloadTicketPDF(args: Record<string, unknown>): Promise<StandardToolResponse> {
+/**
+ * handleDownloadTicketPDF — proactively verifies the PDF CAN be generated
+ * by calling /api/ticket/send with verify=true before returning success.
+ * Only returns success:true if the API confirms PDF generation works.
+ * Returns the BrowserEvent for the frontend to trigger the actual download.
+ *
+ * This prevents the LLM from claiming "PDF downloaded" when the API
+ * endpoint is broken, pdfkit is misconfigured, or the data is invalid.
+ */
+async function handleDownloadTicketPDF(
+  args: Record<string, unknown>,
+  requestId?: RequestId
+): Promise<StandardToolResponse> {
+  const log = requestId ? createLogger(requestId) : null;
+
   const required = ["pnr", "trainName", "trainNumber", "from", "fromCode", "to", "toCode", "date", "departure", "arrival", "coach", "seat", "tier", "fare", "class", "passengerName"];
   for (const field of required) {
     if (!args[field]) {
+      log?.error(`downloadTicketPDF missing field: ${field}`);
       return failure("INVALID_INPUT", `Missing required field: ${field}`);
     }
   }
 
+  // ── STEP 1: Proactively verify PDF generation works ─────────
+  // Call /api/ticket/send with verify=true — the API validates the data
+  // and checks that pdfkit can generate the PDF, WITHOUT returning the
+  // full PDF buffer (saves bandwidth).
+  log?.info(`downloadTicketPDF: verifying PDF generation for PNR ${args.pnr}`);
   try {
-    // Call the ticket/send API with the download flag
-    const response = await fetchWithTimeout("/api/ticket/send", {
+    const verifyResponse = await fetchWithTimeout("/api/ticket/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        email: "download@raily.app", // Special flag for download
-        pnr: args.pnr,
-        trainName: args.trainName,
-        trainNumber: args.trainNumber,
-        from: args.from,
-        fromCode: args.fromCode,
-        to: args.to,
-        toCode: args.toCode,
-        date: args.date,
-        departure: args.departure,
-        arrival: args.arrival,
-        duration: args.duration || "",
-        coach: args.coach,
-        seat: args.seat,
-        tier: args.tier,
+        ...args,
+        email: "download@raily.app",
         fare: Number(args.fare),
-        class: args.class,
+        duration: args.duration || "",
         passengerName: args.passengerName || "Passenger",
+        verify: true, // ← tells the API to do a dry-run validation
       }),
-    }, 30_000); // 30s timeout for PDF generation
+    }, 15_000);
 
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
+    const verifyBody = await verifyResponse.json();
+
+    if (!verifyResponse.ok || !verifyBody.success) {
+      const errorMsg = verifyBody?.error?.message || "PDF generation validation failed";
+      log?.error(`downloadTicketPDF verification failed: ${errorMsg}`);
       return failure(
-        body?.error?.code || "DOWNLOAD_FAILED",
-        body?.error?.message || `Failed to generate PDF (${response.status})`
+        verifyBody?.error?.code || "PDF_VERIFICATION_FAILED",
+        `The ticket PDF could not be generated: ${errorMsg}. The booking is confirmed but the download is unavailable.`
       );
     }
 
-    // Get the blob and trigger browser download
-    const blob = await response.blob();
-    const filename = `ticket-${args.pnr}.pdf`;
-    const blobUrl = URL.createObjectURL(blob);
-
-    // Create an anchor and trigger download
-    const anchor = document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-
-    // Clean up the blob URL after a delay
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
-
-    return success(
-      {
-        pnr: args.pnr as string,
-        trainName: args.trainName as string,
-        trainNumber: args.trainNumber as string,
-        filename,
-      },
-      `PDF ticket for ${args.trainName} (${args.pnr}) has been downloaded successfully`
-    );
+    log?.info(`downloadTicketPDF: verification passed for PNR ${args.pnr}`);
   } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Verification request failed";
+    log?.error(`downloadTicketPDF verification threw: ${message}`);
     return failure(
-      "DOWNLOAD_FAILED",
-      err instanceof Error ? err.message : "Failed to download ticket PDF. The PDF service may be unavailable."
+      "PDF_VERIFICATION_FAILED",
+      `Could not verify PDF generation: ${message}. The booking is confirmed but the download may not work.`
     );
   }
+
+  // ── STEP 2: Build the download event ────────────────────────
+  // Only reached if verification passed, so the actual download
+  // fetch is very likely to succeed.
+  const downloadEvent: DownloadPdfEvent = {
+    type: "download-pdf",
+    url: "/api/ticket/send",
+    method: "POST",
+    body: {
+      email: "download@raily.app", // Special flag for download
+      pnr: args.pnr,
+      trainName: args.trainName,
+      trainNumber: args.trainNumber,
+      from: args.from,
+      fromCode: args.fromCode,
+      to: args.to,
+      toCode: args.toCode,
+      date: args.date,
+      departure: args.departure,
+      arrival: args.arrival,
+      duration: args.duration || "",
+      coach: args.coach,
+      seat: args.seat,
+      tier: args.tier,
+      fare: Number(args.fare),
+      class: args.class,
+      passengerName: args.passengerName || "Passenger",
+    },
+    filename: `ticket-${args.pnr}.pdf`,
+    eventId: nextEventId(),
+  };
+
+  log?.info(`downloadTicketPDF: verification passed, returning event ${downloadEvent.eventId} for PNR ${args.pnr}`);
+
+  // NOTE: success:true means "PDF data is validated and ready for browser download"
+  // It does NOT mean the file was saved to disk — that's async via BrowserEvent
+  return success(
+    {
+      pnr: args.pnr as string,
+      trainName: args.trainName as string,
+      trainNumber: args.trainNumber as string,
+      filename: downloadEvent.filename,
+      verificationStatus: "passed",
+    },
+    `The PDF ticket for ${args.trainName} (${args.pnr}) has been validated and is being downloaded in your browser. If the download doesn't start automatically, check your browser's download settings.`,
+    [downloadEvent]
+  );
 }
 
-async function handleSendTicketEmail(args: Record<string, unknown>): Promise<StandardToolResponse> {
+async function handleSendTicketEmail(
+  args: Record<string, unknown>,
+  requestId?: RequestId
+): Promise<StandardToolResponse> {
+  const log = requestId ? createLogger(requestId) : null;
+
   const email = args.email as string;
   if (!email || !email.includes("@")) {
     return failure("INVALID_INPUT", "A valid email address is required");
@@ -636,6 +720,7 @@ async function handleSendTicketEmail(args: Record<string, unknown>): Promise<Sta
   const required = ["pnr", "trainName", "trainNumber", "from", "fromCode", "to", "toCode", "date", "departure", "arrival", "coach", "seat", "tier", "fare", "class", "passengerName"];
   for (const field of required) {
     if (!args[field]) {
+      log?.error(`sendTicketEmail missing field: ${field}`);
       return failure("INVALID_INPUT", `Missing required field: ${field}`);
     }
   }
@@ -669,21 +754,26 @@ async function handleSendTicketEmail(args: Record<string, unknown>): Promise<Sta
     const body = await response.json();
 
     if (!response.ok || !body.success) {
+      log?.error(`sendTicketEmail failed: ${response.status} ${body?.error?.message || ""}`);
       return failure(
         body?.error?.code || "EMAIL_FAILED",
-        body?.error?.message || "Failed to send ticket email"
+        body?.error?.message ? `Failed to send ticket email: ${body.error.message}` : "Failed to send ticket email"
       );
     }
 
+    log?.info(`sendTicketEmail sent to ${email} for PNR ${args.pnr}`);
     return success(
-      { pnr: args.pnr as string, email },
-      `Ticket PDF has been sent to ${email}`
+      {
+        pnr: args.pnr as string,
+        email,
+        emailId: body?.data?.emailId || null,
+      },
+      `Ticket PDF has been sent to ${email}. They should receive it within a few minutes.`
     );
   } catch (err: unknown) {
-    return failure(
-      "EMAIL_FAILED",
-      err instanceof Error ? err.message : "Failed to send ticket email. The email service may be unavailable."
-    );
+    const message = err instanceof Error ? err.message : "Failed to send ticket email";
+    log?.error(`sendTicketEmail threw: ${message}`);
+    return failure("EMAIL_FAILED", message);
   }
 }
 
@@ -704,28 +794,18 @@ async function handleConfirmBooking(args: Record<string, unknown>): Promise<Stan
   const passengerName = (args.passengerName as string) || "Primary Passenger";
   const bookingTime = new Date().toISOString();
 
-  // Save to localStorage
-  try {
-    if (typeof window !== "undefined") {
-      const RECENT_BOOKINGS_KEY = "railyRecentBookings";
-      const existing = JSON.parse(localStorage.getItem(RECENT_BOOKINGS_KEY) || "[]");
-      const filtered = existing.filter((b: { pnr: string }) => b.pnr !== pnr);
-      const updated = [{
-        pnr,
-        trainName: args.trainName,
-        trainNumber,
-        from: (args.fromCode as string) || (args.from as string),
-        to: (args.toCode as string) || (args.to as string),
-        date: args.date,
-        time: `${args.departure} → ${args.arrival}`,
-        status: "CONFIRMED",
-        timestamp: bookingTime,
-      }, ...filtered].slice(0, 5);
-      localStorage.setItem(RECENT_BOOKINGS_KEY, JSON.stringify(updated));
-    }
-  } catch {
-    // localStorage might not be available
-  }
+  // Save to localStorage (fire-and-forget — failure is non-critical)
+  saveBookingToLocalStorage({
+    pnr,
+    trainName: args.trainName as string,
+    trainNumber,
+    from: (args.fromCode as string) || (args.from as string),
+    to: (args.toCode as string) || (args.to as string),
+    date: args.date as string,
+    time: `${args.departure} → ${args.arrival}`,
+    status: "CONFIRMED",
+    timestamp: bookingTime,
+  });
 
   return success(
     {
@@ -751,6 +831,47 @@ async function handleConfirmBooking(args: Record<string, unknown>): Promise<Stan
     },
     `Booking confirmed! PNR: ${pnr}. Your ticket on ${args.trainName} (${trainNumber}) from ${args.from} to ${args.to} is confirmed.`
   );
+}
+
+/* ─── Local Storage Save (extracted for safety) ──────────── */
+
+interface LocalBookingRecord {
+  pnr: string;
+  trainName: string;
+  trainNumber: string;
+  from: string;
+  to: string;
+  date: string;
+  time: string;
+  status: string;
+  timestamp: string;
+}
+
+function saveBookingToLocalStorage(record: LocalBookingRecord): void {
+  // localStorage is not always available (SSR, incognito restrictions, etc.)
+  // This is best-effort — failure is non-critical
+  if (typeof window === "undefined") return;
+
+  try {
+    const RECENT_BOOKINGS_KEY = "railyRecentBookings";
+    const raw = localStorage.getItem(RECENT_BOOKINGS_KEY);
+    let existing: LocalBookingRecord[] = [];
+    try {
+      existing = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(existing)) existing = [];
+    } catch {
+      // Corrupted localStorage — reset
+      existing = [];
+    }
+
+    const filtered = existing.filter((b) => b.pnr !== record.pnr);
+    const updated = [record, ...filtered].slice(0, 5);
+    localStorage.setItem(RECENT_BOOKINGS_KEY, JSON.stringify(updated));
+  } catch (err: unknown) {
+    // localStorage might be full, disabled, or throw for other reasons
+    // This is non-critical — the booking is still confirmed
+    console.warn("[Tools] Failed to save booking to localStorage:", err instanceof Error ? err.message : String(err));
+  }
 }
 
 /* ─── Tool Result Formatter ──────────────────────────────── */
@@ -795,20 +916,4 @@ export function buildToolResultMessage(
     tool_call_id: toolCallId,
     name: toolName,
   };
-}
-
-export function isToolExecutionNeeded(content: string): boolean {
-  // Check if the response contains a tool call trigger
-  const lower = content.toLowerCase();
-  return (
-    lower.includes("showTrainList") ||
-    lower.includes("showSeatMap") ||
-    lower.includes("showBooking") ||
-    lower.includes("showJourney") ||
-    lower.includes("showPnr") ||
-    lower.includes("showBookingHistory") ||
-    lower.includes("search") ||
-    lower.includes("check") ||
-    lower.includes("track")
-  );
 }

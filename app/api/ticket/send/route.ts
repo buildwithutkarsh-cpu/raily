@@ -38,6 +38,9 @@ interface SendTicketRequest {
   class: string;
   passengerName: string;
   platform?: string;
+  /** If true, only validates the data without generating the full PDF buffer.
+   * Used by the downloadTicketPdf tool for proactive verification. */
+  verify?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -58,7 +61,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!body.email.includes("@")) {
+    if (body.email !== "download@raily.app" && !body.email.includes("@")) {
       return NextResponse.json(
         {
           success: false,
@@ -71,7 +74,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Verify mode (dry-run) ─────────────────────────────────
+    // When verify=true, validate the data is complete but do NOT
+    // generate the full PDF buffer. Used by the downloadTicketPdf
+    // tool to proactively check if PDF generation will succeed.
+    if (body.verify) {
+      const required = ["pnr", "trainName", "trainNumber", "from", "fromCode", "to", "toCode", "date", "departure", "arrival", "coach", "seat", "tier", "class"];
+      for (const field of required) {
+        if (!(body as unknown as Record<string, unknown>)[field]) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "INVALID_INPUT",
+                message: `Missing required field: ${field}`,
+              },
+            },
+            { status: 400 }
+          );
+        }
+      }
+
+      // Validation passed — return success without generating PDF
+      return NextResponse.json({
+        success: true,
+        data: { verified: true, pnr: body.pnr },
+        message: "PDF generation data validated successfully",
+      });
+    }
+
     // ── Generate PDF ────────────────────────────────────────
+    console.log(`[Ticket API] Generating PDF for PNR ${body.pnr} (${body.trainName})`);
     const pdfBuffer = await generateTicketPDF({
       pnr: body.pnr,
       trainName: body.trainName,
@@ -99,6 +132,7 @@ export async function POST(request: NextRequest) {
         minute: "2-digit",
       }),
     });
+    console.log(`[Ticket API] PDF generated for PNR ${body.pnr}: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
 
     // ── Check if request is for download vs email ────────────
     const isExplicitDownload = body.email === "download@raily.app";
@@ -106,11 +140,13 @@ export async function POST(request: NextRequest) {
 
     if (isExplicitDownload) {
       // User clicked Download — return PDF directly
+      console.log(`[Ticket API] Returning PDF for download: ticket-${body.pnr}.pdf`);
       return new NextResponse(new Uint8Array(pdfBuffer), {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": `attachment; filename="ticket-${body.pnr}.pdf"`,
+          "Content-Length": String(pdfBuffer.length),
           "X-Ticket-Info": "PDF ticket generated successfully.",
         },
       });

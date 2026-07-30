@@ -10,7 +10,7 @@ import {
 } from "react";
 import * as rapi from "@/lib/rapi/endpoints";
 import { processWithAI } from "@/lib/ai/orchestrator";
-import type { AIComponentType, ToolResult } from "@/lib/ai/types";
+import type { AIComponentType, ToolResult, RequestId, BrowserEvent } from "@/lib/ai/types";
 import { buildSeatId, buildTrainFromBookingData, buildQueryFromBookingData } from "@/lib/booking-store-utils";
 
 /* ─── Types ───────────────────────────────────────────────── */
@@ -137,7 +137,9 @@ function getRecentBookings(): RecentBooking[] {
   try {
     const stored = localStorage.getItem(RECENT_BOOKINGS_KEY);
     return stored ? JSON.parse(stored) : [];
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 export function getStoredRecentBookings(): RecentBooking[] {
@@ -226,7 +228,6 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   const setSelectedSeat = useCallback((seatId: string | null) => setState((prev) => ({ ...prev, selectedSeat: seatId })), []);
   const setSeatRecommendation = useCallback((rec: SeatRecommendation | null) => setState((prev) => ({ ...prev, seatRecommendation: rec })), []);
 
-  // Ref to track the latest state synchronously for use in callbacks
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -279,9 +280,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Extract booking fields from a data source (either result.data or tool args)
-   * and sync them to the React booking store. Used as the primary path for    * confirmBooking and as a defensive fallback for downloadTicketPdf and
-   * sendTicketEmail.
+   * Extract booking fields from a data source and sync them to the React booking store.
    */
   const syncBookingFromData = useCallback((source: Record<string, unknown>) => {
     const pnr = source.pnr as string;
@@ -303,16 +302,14 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     const toCode = source.toCode as string;
     const date = source.date as string;
 
-    // Only sync if we have essential data
     if (!pnr || !trainName || !trainNumber) return;
 
-    // Use extracted pure helpers for construction
     const train = buildTrainFromBookingData({
       trainName, trainNumber, departure, arrival, duration,
       fare, class: classType, coach, seat, tier,
       fromCode, toCode,
     });
-    if (!train) return; // essential fields missing
+    if (!train) return;
 
     const query = buildQueryFromBookingData({
       from, fromCode, to, toCode, date,
@@ -332,16 +329,11 @@ export function BookingProvider({ children }: { children: ReactNode }) {
 
   /**
    * Sync the booking store React state when the AI's booking-related tools succeed.
-   *    * Primary: confirmBooking — always syncs from result.data
-   * Defensive fallback: downloadTicketPdf and sendTicketEmail — sync from args
-   *   only when the store doesn't already have booking data (pnrNumber is null).
-   *   This ensures the BookingConfirmation component renders correctly even if     *   confirmBooking's state sync was missed for any reason.
    */
-  const handleToolResult = useCallback((toolName: string, args: Record<string, unknown>, result: ToolResult) => {
+  const handleToolResult = useCallback((toolName: string, args: Record<string, unknown>, result: ToolResult, _requestId: RequestId) => {
     if (!result.success) return;
 
     if (toolName === "confirmBooking" && result.data) {
-      // Primary path: confirmBooking result.data has all fields
       syncBookingFromData(result.data as Record<string, unknown>);
       return;
     }
@@ -375,6 +367,139 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     }
   }, [syncBookingFromData]);
 
+  /* ── Execute Browser Events ──────────────────────────────── */
+
+  /**
+   * Dispatch validated browser events from tools to the frontend.
+   * Each event type maps to a specific browser action:
+   *   - download-pdf: Fetch the PDF and trigger browser download
+   *   - navigate: Navigate to a URL
+   *   - scroll-to: Scroll to an element
+   *   - focus: Focus an element
+   *
+   * On failure, reports errors back to the chat messages so the user
+   * sees them instead of the AI claiming success for failed actions.
+   */
+  const executeBrowserEvents = useCallback(
+    async (events: BrowserEvent[], _requestId: RequestId, onEventError?: (errorMsg: string) => void) => {
+      const errors: string[] = [];
+
+      for (const event of events) {
+        try {
+          switch (event.type) {
+            case "download-pdf": {
+              const { url, method, body, filename } = event;
+
+              const response = await fetch(url, {
+                method,
+                headers: method === "POST" ? { "Content-Type": "application/json" } : undefined,
+                body: body ? JSON.stringify(body) : undefined,
+              });
+
+              if (!response.ok) {
+                // Try to parse error body for user-friendly message
+                let errorMsg = `Download failed (${response.status})`;
+                try {
+                  const errBody = await response.json();
+                  if (errBody?.error?.message) {
+                    errorMsg = `Download failed: ${errBody.error.message}`;
+                  }
+                } catch {
+                  // Response is not JSON — use default message
+                }
+                console.error(`[Events] Download failed for ${filename}: ${response.status}`);
+                errors.push(errorMsg);
+                break;
+              }
+
+              // Verify content type is actually PDF
+              const contentType = response.headers.get("content-type") || "";
+              const blob = await response.blob();
+
+              // Check if response is explicitly not PDF (HTML error page, JSON error, etc.)
+              const isNonPdfContentType =
+                contentType.includes("text/html") ||
+                contentType.includes("application/json") ||
+                contentType.includes("text/plain");
+
+              if (isNonPdfContentType || (!contentType.includes("pdf") && blob.size < 200)) {
+                // Response is likely an error masquerading as a download
+                const text = await blob.text().catch(() => "");
+                let errorMsg = "Download failed: Server returned an unexpected response";
+                try {
+                  const errBody = JSON.parse(text);
+                  if (errBody?.error?.message) {
+                    errorMsg = `Download failed: ${errBody.error.message}`;
+                  }
+                } catch {
+                  // Not JSON — use default
+                }
+                console.error(`[Events] Download returned non-PDF response for ${filename}: ${contentType}`, text.slice(0, 200));
+                errors.push(errorMsg);
+                break;
+              }
+
+              const blobUrl = URL.createObjectURL(blob);
+
+              const anchor = document.createElement("a");
+              anchor.href = blobUrl;
+              anchor.download = filename;
+              document.body.appendChild(anchor);
+              anchor.click();
+              document.body.removeChild(anchor);
+
+              console.log(`[Events] PDF download triggered: ${filename} (${(blob.size / 1024).toFixed(1)} KB)`);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+              break;
+            }
+
+            case "navigate": {
+              window.location.href = event.url;
+              break;
+            }
+
+            case "scroll-to": {
+              const el = document.querySelector(event.selector);
+              if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+              } else {
+                errors.push(`Could not scroll to: element "${event.selector}" not found`);
+              }
+              break;
+            }
+
+            case "focus": {
+              const el = document.querySelector(event.selector) as HTMLElement | null;
+              if (el) {
+                el.focus();
+              } else {
+                errors.push(`Could not focus: element "${event.selector}" not found`);
+              }
+              break;
+            }
+
+            default:
+              // Exhaustive check — all event types should be handled above
+              const _exhaustive: never = event;
+              break;
+          }
+        } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : `Failed to execute ${event.type}`;
+          console.error(`[Events] Failed to execute ${event.type}:`, err);
+          errors.push(errorMsg);
+        }
+      }
+
+      // Report errors to the caller so they can be surfaced in the chat
+      if (errors.length > 0) {
+        const combinedMsg = errors.join("; ");
+        console.error(`[Events] ${errors.length} event(s) failed: ${combinedMsg}`);
+        onEventError?.(combinedMsg);
+      }
+    },
+    []
+  );
+
   /* ── Process User Input (AI-native) ──────────────────────── */
 
   const processUserInput = useCallback(async (text: string) => {
@@ -397,99 +522,122 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     };
     setState((prev) => ({ ...prev, messages: [...prev.messages, streamMsg] }));
 
-    // Process with AI
+    // Process with AI — using updated callbacks with requestId
     try {
       await processWithAI(trimmed, {
-      onText: (chunk: string) => {
-        // Accumulate text into the streaming message
-        setState((prev) => {
-          const messages = [...prev.messages];
-          const idx = messages.findIndex((m) => m.id === streamMsgId);
-          if (idx >= 0) {
-            messages[idx] = {
-              ...messages[idx],
-              content: messages[idx].content + chunk,
-              streaming: true,
-            };
-          }
-          return { ...prev, messages };
-        });
-      },
-      onToolCall: (toolName: string, _args: Record<string, unknown>) => {
-        // Show which tool is being called (subtle indicator)
-        setState((prev) => {
-          const messages = [...prev.messages];
-          const idx = messages.findIndex((m) => m.id === streamMsgId);
-          if (idx >= 0) {
-            const toolLabel = toolName.replace(/_/g, " ");
-            messages[idx] = {
-              ...messages[idx],
-              content: messages[idx].content + `\n_→ ${toolLabel}..._`,
-              streaming: true,
-            };
-          }
-          return { ...prev, messages };
-        });
-      },
-      onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult) => {
-        handleToolResult(toolName, args, result);
-      },
-      onComponent: (component: AIComponentType) => {
-        // Map AI component to ChatComponentType and update the message
-        setState((prev) => {
-          const messages = [...prev.messages];
-          const idx = messages.findIndex((m) => m.id === streamMsgId);
-          if (idx >= 0) {
-            messages[idx] = {
-              ...messages[idx],
-              component: mapAIComponent(component),
-              streaming: false,
-            };
-          }
-          return { ...prev, messages };
-        });
-      },
-      onDone: (_fullContent: string, _component: string | null) => {
-        // Mark streaming as complete
-        setState((prev) => {
-          const messages = [...prev.messages];
-          const idx = messages.findIndex((m) => m.id === streamMsgId);
-          if (idx >= 0) {
-            messages[idx] = {
-              ...messages[idx],
-              streaming: false,
-            };
-          }
-          return { ...prev, messages, isProcessing: false };
-        });
-        streamingMsgId.current = null;
-      },
-      onError: (error: string) => {
-        // Show error in the streaming message
-        setState((prev) => {
-          const messages = [...prev.messages];
-          const idx = messages.findIndex((m) => m.id === streamMsgId);
-          if (idx >= 0) {
-            messages[idx] = {
-              ...messages[idx],
-              content: `I encountered an error: ${error}. Please try again or rephrase your request.`,
-              streaming: false,
-            };
-          } else {
-            // Fallback: add error message
-            messages.push({
-              id: `msg-error-${Date.now()}`,
-              role: "assistant",
-              content: `I encountered an error: ${error}. Please try again.`,
-              component: "text",
-              timestamp: Date.now(),
+        onText: (chunk: string, _requestId: RequestId) => {
+          // Accumulate text into the streaming message
+          setState((prev) => {
+            const messages = [...prev.messages];
+            const idx = messages.findIndex((m) => m.id === streamMsgId);
+            if (idx >= 0) {
+              messages[idx] = {
+                ...messages[idx],
+                content: messages[idx].content + chunk,
+                streaming: true,
+              };
+            }
+            return { ...prev, messages };
+          });
+        },
+
+        onToolCall: (toolName: string, _args: Record<string, unknown>, _requestId: RequestId) => {
+          // Show which tool is being called (subtle indicator)
+          setState((prev) => {
+            const messages = [...prev.messages];
+            const idx = messages.findIndex((m) => m.id === streamMsgId);
+            if (idx >= 0) {
+              const toolLabel = toolName.replace(/_/g, " ");
+              messages[idx] = {
+                ...messages[idx],
+                content: messages[idx].content + `\n_→ ${toolLabel}..._`,
+                streaming: true,
+              };
+            }
+            return { ...prev, messages };
+          });
+        },
+
+        onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult, requestId: RequestId) => {
+          handleToolResult(toolName, args, result, requestId);
+        },
+
+        onComponent: (component: AIComponentType, _requestId: RequestId) => {
+          // Map AI component to ChatComponentType and update the message
+          setState((prev) => {
+            const messages = [...prev.messages];
+            const idx = messages.findIndex((m) => m.id === streamMsgId);
+            if (idx >= 0) {
+              messages[idx] = {
+                ...messages[idx],
+                component: mapAIComponent(component),
+                streaming: false,
+              };
+            }
+            return { ...prev, messages };
+          });
+        },
+
+        onDone: (_fullContent: string, _component: string | null, _requestId: RequestId) => {
+          // Mark streaming as complete
+          setState((prev) => {
+            const messages = [...prev.messages];
+            const idx = messages.findIndex((m) => m.id === streamMsgId);
+            if (idx >= 0) {
+              messages[idx] = {
+                ...messages[idx],
+                streaming: false,
+              };
+            }
+            return { ...prev, messages, isProcessing: false };
+          });
+          streamingMsgId.current = null;
+        },
+
+        onError: (error: string, _requestId: RequestId) => {
+          // Show error in the streaming message
+          setState((prev) => {
+            const messages = [...prev.messages];
+            const idx = messages.findIndex((m) => m.id === streamMsgId);
+            if (idx >= 0) {
+              messages[idx] = {
+                ...messages[idx],
+                content: `I encountered an error: ${error}. Please try again or rephrase your request.`,
+                streaming: false,
+              };
+            } else {
+              // Fallback: add error message
+              messages.push({
+                id: `msg-error-${Date.now()}`,
+                role: "assistant",
+                content: `I encountered an error: ${error}. Please try again.`,
+                component: "text",
+                timestamp: Date.now(),
+              });
+            }
+            return { ...prev, messages, isProcessing: false };
+          });
+          streamingMsgId.current = null;
+        },
+
+        onEvents: (events: BrowserEvent[], requestId: RequestId) => {
+          // Execute browser events from tools (e.g., download-pdf)
+          // and surface any errors to the chat so the user sees them
+          executeBrowserEvents(events, requestId, (errorMsg: string) => {
+            setState((prev) => {
+              const messages = [...prev.messages];
+              const idx = messages.findIndex((m) => m.id === streamMsgId);
+              if (idx >= 0) {
+                messages[idx] = {
+                  ...messages[idx],
+                  content: messages[idx].content + `\n\n_I tried to process your request but encountered an issue: ${errorMsg}_`,
+                };
+              }
+              return { ...prev, messages };
             });
-          }
-          return { ...prev, messages, isProcessing: false };
-        });
-        streamingMsgId.current = null;
-      },
-    });
+          });
+        },
+      });
     } catch (err: unknown) {
       // Catch-all for unhandled exceptions from processWithAI
       const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred";
@@ -507,7 +655,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       });
       streamingMsgId.current = null;
     }
-  }, [mapAIComponent, handleToolResult]);
+  }, [mapAIComponent, handleToolResult, executeBrowserEvents]);
 
   return (
     <BookingContext.Provider value={{
