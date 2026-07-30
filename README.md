@@ -222,7 +222,5 @@ npm run test:headers
 - `ARCHITECTURE.md` contains deployment and service boundary guidance.
 
 ## Further reading
-
-- `ARCHITECTURE.md` — architecture, data flow, and design decisions
 - `Rapi/` — Indian Railways data service implementation and test coverage
 - `app/` and `lib/` — AI orchestration and chat-first application logic
