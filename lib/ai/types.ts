@@ -76,6 +76,20 @@ export interface ToolResult {
   toolName: string;
 }
 
+/**
+ * Standardized response that every tool MUST return.
+ * The AI reasons ONLY over these fields — never fabricates outcomes.
+ */
+export interface StandardToolResponse {
+  success: boolean;
+  data: Record<string, unknown> | null;
+  message: string;
+  error: {
+    code: string;
+    message: string;
+  } | null;
+}
+
 /* ─── Streaming ──────────────────────────────────────────── */
 
 export type StreamChunk =
@@ -133,12 +147,12 @@ export type AIComponentType =
   | "route-comparison";
 
 export const AI_COMPONENT_TRIGGERS: Record<string, AIComponentType> = {
-  "show_train_list": "train-list",
-  "show_seat_map": "seat-map",
-  "show_booking_confirmation": "booking-confirmation",
-  "show_journey_tracker": "journey-tracker",
-  "show_pnr_status": "pnr-status",
-  "show_booking_history": "booking-history",
-  "show_station_search": "station-search",
-  "show_route_comparison": "route-comparison",
+  "showTrainList": "train-list",
+  "showSeatMap": "seat-map",
+  "showBookingConfirmation": "booking-confirmation",
+  "showJourneyTracker": "journey-tracker",
+  "showPnrStatus": "pnr-status",
+  "showBookingHistory": "booking-history",
+  "showStationSearch": "station-search",
+  "showRouteComparison": "route-comparison",
 };

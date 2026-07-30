@@ -2,10 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
-import {
-  useBooking,
-  createAssistantMessage,
-} from "@/lib/booking-store";
+import { useBooking } from "@/lib/booking-store";
 import { Check, Sparkles, ChevronLeft, ChevronRight } from "lucide-react";
 
 /* ─── Seeded PRNG ──────────────────────────────────────────── */
@@ -98,7 +95,7 @@ const TIER_LABELS: Record<string, string> = {
 /* ─── Component ────────────────────────────────────────────── */
 
 export default function CoachVisualizer() {
-  const { state, setSelectedSeat, confirmBooking, addMessage } = useBooking();
+  const { state, setSelectedSeat, processUserInput } = useBooking();
   const [coachIndex, setCoachIndex] = useState(0);
 
   const train = state.selectedTrain;
@@ -122,14 +119,21 @@ export default function CoachVisualizer() {
   );
 
   const handleConfirm = useCallback(async () => {
-    const pnr = await confirmBooking();
-    addMessage(
-      createAssistantMessage(
-        `Booking confirmed for **${train?.name || "Rajdhani Express"}**.\n\nPNR: **${pnr}**\nCoach: ${coachName} · Seat: ${state.selectedSeat} · ₹${fare}`,
-        "booking-confirmation"
-      )
-    );
-  }, [confirmBooking, addMessage, train, coachName, state.selectedSeat, fare]);
+    // Route through the AI pipeline so all bookings go through confirmBooking tool
+    const query = state.query;
+    const seatData = allSeats.find((s) => s.id === state.selectedSeat);
+
+    const bookingMessage = [
+      `Confirm and book this ticket:`,
+      `Train: ${train?.name || ""} (${train?.number || ""})`,
+      `From: ${query?.origin || ""} to ${query?.destination || ""}`,
+      `Date: ${query?.date || ""}`,
+      `Departure: ${train?.departure || ""} · Arrival: ${train?.arrival || ""} · Duration: ${train?.duration || ""}`,
+      `Coach: ${coachName} · Seat: ${seatData?.number || ""} · Tier: ${seatData?.tier || ""} · Fare: ₹${fare} · Class: ${classType}`,
+    ].join("\n");
+
+    await processUserInput(bookingMessage);
+  }, [processUserInput, train, coachName, state.selectedSeat, state.query, allSeats, fare, classType]);
 
   const seatStyle = (status: string, isSelected: boolean) => {
     if (isSelected) return "bg-[var(--fg)] text-[var(--bg)] border-[var(--fg)]";

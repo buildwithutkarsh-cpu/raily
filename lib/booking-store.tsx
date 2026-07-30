@@ -10,7 +10,8 @@ import {
 } from "react";
 import * as rapi from "@/lib/rapi/endpoints";
 import { processWithAI } from "@/lib/ai/orchestrator";
-import type { AIComponentType } from "@/lib/ai/types";
+import type { AIComponentType, ToolResult } from "@/lib/ai/types";
+import { buildSeatId, buildTrainFromBookingData, buildQueryFromBookingData } from "@/lib/booking-store-utils";
 
 /* ─── Types ───────────────────────────────────────────────── */
 
@@ -115,25 +116,9 @@ export interface BookingState {
   aiError: string | null;
 }
 
-/* ─── PNR Generator (simulated booking) ────────────────────── */
-
-const PNR_FIRST_DIGITS = [4, 6, 8];
-
-function generatePNR(trainNumber: string, coach: string, seatId: string | null): string {
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  const raw = `${trainNumber}|${dateStr}|${coach}|${seatId || "-"}`;
-  let hash = 0;
-  for (let i = 0; i < raw.length; i++) { const char = raw.charCodeAt(i); hash = ((hash << 5) - hash) + char; hash |= 0; }
-  const absHash = Math.abs(hash);
-  const nineDigits = absHash % 1_000_000_000;
-  const firstDigit = PNR_FIRST_DIGITS[absHash % PNR_FIRST_DIGITS.length];
-  return `${firstDigit}${String(nineDigits).padStart(9, "0")}`;
-}
-
 /* ─── Recent Bookings (localStorage) ───────────────────────── */
 
-const RECENT_BOOKINGS_KEY = "raily_recent_bookings";
+const RECENT_BOOKINGS_KEY = "railyRecentBookings";
 
 interface RecentBooking {
   pnr: string;
@@ -153,16 +138,6 @@ function getRecentBookings(): RecentBooking[] {
     const stored = localStorage.getItem(RECENT_BOOKINGS_KEY);
     return stored ? JSON.parse(stored) : [];
   } catch { return []; }
-}
-
-function addRecentBooking(booking: RecentBooking): void {
-  if (typeof window === "undefined") return;
-  try {
-    const existing = getRecentBookings();
-    const filtered = existing.filter((b) => b.pnr !== booking.pnr);
-    const updated = [booking, ...filtered].slice(0, 5);
-    localStorage.setItem(RECENT_BOOKINGS_KEY, JSON.stringify(updated));
-  } catch { /* silent */ }
 }
 
 export function getStoredRecentBookings(): RecentBooking[] {
@@ -224,7 +199,6 @@ interface BookingContextValue {
   setSelectedCoach: (coach: string) => void;
   setSelectedSeat: (seatId: string | null) => void;
   setSeatRecommendation: (rec: SeatRecommendation | null) => void;
-  confirmBooking: () => Promise<string>;
   resetBooking: () => void;
   addMessage: (msg: Message) => void;
   clearMessages: () => void;
@@ -256,40 +230,6 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  const confirmBooking = useCallback(async (): Promise<string> => {
-    const currentState = stateRef.current;
-    const train = currentState.selectedTrain;
-    const coach = currentState.selectedCoach;
-    const seat = currentState.selectedSeat;
-    const query = currentState.query;
-    const pnr = generatePNR(train?.number || "00000", coach || "B1", seat);
-
-    if (train && query) {
-      addRecentBooking({
-        pnr,
-        trainName: train.name,
-        trainNumber: train.number,
-        from: query.origin.toUpperCase() || "—",
-        to: query.destination.toUpperCase() || "—",
-        date: query.date || new Date().toLocaleDateString(),
-        time: `${train.departure} → ${train.arrival}`,
-        status: "CONFIRMED" as const,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
-    // Update state synchronously
-    setState((prev) => ({
-      ...prev,
-      isProcessing: false,
-      bookingConfirmed: true,
-      step: "confirmed" as const,
-      pnrNumber: pnr,
-    }));
-
-    return pnr;
-  }, []);
-
   const resetBooking = useCallback(() => setState({ ...defaultState, messages: [createWelcomeMessage()] }), []);
   const addMessage = useCallback((msg: Message) => setState((prev) => ({ ...prev, messages: [...prev.messages, msg] })), []);
   const clearMessages = useCallback(() => setState((prev) => ({ ...prev, messages: [createWelcomeMessage()] })), []);
@@ -313,14 +253,14 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   /** Map AI component type tags to our ChatComponentType */
   const mapAIComponent = useCallback((aiComponent: string): ChatComponentType => {
     const map: Record<string, ChatComponentType> = {
-      "show_train_list": "train-list",
-      "show_seat_map": "seat-map",
-      "show_booking_confirmation": "booking-confirmation",
-      "show_journey_tracker": "journey-tracker",
-      "show_pnr_status": "pnr-status",
-      "show_booking_history": "booking-history",
-      "show_station_search": "text",
-      "show_route_comparison": "train-list",
+      "showTrainList": "train-list",
+      "showSeatMap": "seat-map",
+      "showBookingConfirmation": "booking-confirmation",
+      "showJourneyTracker": "journey-tracker",
+      "showPnrStatus": "pnr-status",
+      "showBookingHistory": "booking-history",
+      "showStationSearch": "text",
+      "showRouteComparison": "train-list",
     };
     return map[aiComponent] || "text";
   }, []);
@@ -337,6 +277,103 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       return false;
     }
   }, []);
+
+  /**
+   * Extract booking fields from a data source (either result.data or tool args)
+   * and sync them to the React booking store. Used as the primary path for    * confirmBooking and as a defensive fallback for downloadTicketPdf and
+   * sendTicketEmail.
+   */
+  const syncBookingFromData = useCallback((source: Record<string, unknown>) => {
+    const pnr = source.pnr as string;
+    const trainName = source.trainName as string;
+    const trainNumber = source.trainNumber as string;
+    const departure = source.departure as string;
+    const arrival = source.arrival as string;
+    const duration = (source.duration as string) || "";
+    const rawFare = source.fare;
+    const fare = typeof rawFare === "number" ? rawFare : Number(rawFare) || 0;
+    const classType = source.class as string;
+    const coach = source.coach as string;
+    const seat = source.seat as string;
+    const tier = source.tier as string;
+    const seatId = buildSeatId(coach, seat, tier);
+    const from = source.from as string;
+    const fromCode = source.fromCode as string;
+    const to = source.to as string;
+    const toCode = source.toCode as string;
+    const date = source.date as string;
+
+    // Only sync if we have essential data
+    if (!pnr || !trainName || !trainNumber) return;
+
+    // Use extracted pure helpers for construction
+    const train = buildTrainFromBookingData({
+      trainName, trainNumber, departure, arrival, duration,
+      fare, class: classType, coach, seat, tier,
+      fromCode, toCode,
+    });
+    if (!train) return; // essential fields missing
+
+    const query = buildQueryFromBookingData({
+      from, fromCode, to, toCode, date,
+    });
+
+    setState((prev) => ({
+      ...prev,
+      step: "confirmed",
+      pnrNumber: pnr,
+      bookingConfirmed: true,
+      selectedTrain: train,
+      selectedCoach: coach || "B1",
+      selectedSeat: seatId,
+      query,
+    }));
+  }, []);
+
+  /**
+   * Sync the booking store React state when the AI's booking-related tools succeed.
+   *    * Primary: confirmBooking — always syncs from result.data
+   * Defensive fallback: downloadTicketPdf and sendTicketEmail — sync from args
+   *   only when the store doesn't already have booking data (pnrNumber is null).
+   *   This ensures the BookingConfirmation component renders correctly even if     *   confirmBooking's state sync was missed for any reason.
+   */
+  const handleToolResult = useCallback((toolName: string, args: Record<string, unknown>, result: ToolResult) => {
+    if (!result.success) return;
+
+    if (toolName === "confirmBooking" && result.data) {
+      // Primary path: confirmBooking result.data has all fields
+      syncBookingFromData(result.data as Record<string, unknown>);
+      return;
+    }
+
+    // Defensive fallback: downloadTicketPdf or sendTicketEmail — sync from args
+    // but only if the store doesn't already have booking data
+    if (
+      (toolName === "downloadTicketPdf" || toolName === "sendTicketEmail") &&
+      result.success &&
+      !stateRef.current.pnrNumber
+    ) {
+      const bookingData: Record<string, unknown> = {
+        pnr: args.pnr,
+        trainName: args.trainName,
+        trainNumber: args.trainNumber,
+        departure: args.departure,
+        arrival: args.arrival,
+        duration: args.duration,
+        fare: args.fare,
+        class: args.class,
+        coach: args.coach,
+        seat: args.seat,
+        tier: args.tier,
+        from: args.from,
+        fromCode: args.fromCode,
+        to: args.to,
+        toCode: args.toCode,
+        date: args.date,
+      };
+      syncBookingFromData(bookingData);
+    }
+  }, [syncBookingFromData]);
 
   /* ── Process User Input (AI-native) ──────────────────────── */
 
@@ -361,7 +398,8 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, messages: [...prev.messages, streamMsg] }));
 
     // Process with AI
-    await processWithAI(trimmed, {
+    try {
+      await processWithAI(trimmed, {
       onText: (chunk: string) => {
         // Accumulate text into the streaming message
         setState((prev) => {
@@ -392,6 +430,9 @@ export function BookingProvider({ children }: { children: ReactNode }) {
           }
           return { ...prev, messages };
         });
+      },
+      onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult) => {
+        handleToolResult(toolName, args, result);
       },
       onComponent: (component: AIComponentType) => {
         // Map AI component to ChatComponentType and update the message
@@ -449,13 +490,30 @@ export function BookingProvider({ children }: { children: ReactNode }) {
         streamingMsgId.current = null;
       },
     });
-  }, [mapAIComponent]);
+    } catch (err: unknown) {
+      // Catch-all for unhandled exceptions from processWithAI
+      const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred";
+      setState((prev) => {
+        const messages = [...prev.messages];
+        const idx = messages.findIndex((m) => m.id === streamMsgId);
+        if (idx >= 0) {
+          messages[idx] = {
+            ...messages[idx],
+            content: `I encountered an error: ${errorMsg}. Please try again or rephrase your request.`,
+            streaming: false,
+          };
+        }
+        return { ...prev, messages, isProcessing: false };
+      });
+      streamingMsgId.current = null;
+    }
+  }, [mapAIComponent, handleToolResult]);
 
   return (
     <BookingContext.Provider value={{
       state, setStep, setQuery, selectTrain,
       setSelectedCoach, setSelectedSeat, setSeatRecommendation,
-      confirmBooking, resetBooking, addMessage, clearMessages,
+      resetBooking, addMessage, clearMessages,
       processUserInput, checkRapiConnection,
       updateLastMessage, mapAIComponent,
     }}>

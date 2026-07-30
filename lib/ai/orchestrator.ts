@@ -14,7 +14,7 @@ import { createStreamingCompletion, createCompletion } from "./provider";
 import { executeTool, RAILWAY_TOOLS, buildToolResultMessage } from "./tools";
 import { buildMessages, parseAIResponse } from "./prompts";
 import { getConversationMemory, resetConversationMemory } from "./memory";
-import type { AIMessage, AIToolCall, AIComponentType, ConversationSummary } from "./types";
+import type { AIMessage, AIToolCall, AIComponentType, ConversationSummary, ToolResult } from "./types";
 import { AI_COMPONENT_TRIGGERS } from "./types";
 
 /* ─── Stream Callback Types ──────────────────────────────── */
@@ -22,6 +22,8 @@ import { AI_COMPONENT_TRIGGERS } from "./types";
 export interface OrchestrationCallbacks {
   onText: (text: string) => void;
   onToolCall: (toolName: string, args: Record<string, unknown>) => void;
+  /** Fires after each tool executes, with the tool's standardized result */
+  onToolResult: (toolName: string, args: Record<string, unknown>, result: ToolResult) => void;
   onComponent: (component: AIComponentType, data?: Record<string, unknown>) => void;
   onDone: (fullContent: string, component: string | null) => void;
   onError: (error: string) => void;
@@ -51,6 +53,12 @@ async function executeToolCallsAndRespond(
 
       const result = await executeTool(tc.function.name, args, tc.id);
       memory.addToolEntry(result);
+
+      // Fire onToolResult so callers (e.g. booking store) can sync state based on tool success
+      if (callbacks.onToolResult) {
+        callbacks.onToolResult(tc.function.name, args, result);
+      }
+
       return buildToolResultMessage(tc.id, tc.function.name, result);
     })
   );
@@ -113,44 +121,75 @@ export async function processWithAI(
   // Build messages
   const messages = buildMessages(userInput, memory.getEntries(), summary);
 
-  // Wait for streaming to complete
+  // ── PHASE 1: Streaming LLM Pass ─────────────────────────
+  // Accumulators populated by streaming callbacks
+  let accumulatedContent = "";
+  let accumulatedToolCalls: AIToolCall[] = [];
+  let hadError = false;
+
   await createStreamingCompletion(
     messages,
     RAILWAY_TOOLS,
     {
       onText: (text: string) => {
+        accumulatedContent += text;
         callbacks.onText(text);
       },
-      onToolCall: (toolCall: AIToolCall) => {
-        // Tool calls are accumulated and handled in onDone
+      onToolCall: (_toolCall: AIToolCall) => {
+        // Tool calls are accumulated inside createStreamingCompletion
+        // and passed via onDone — no action needed here
       },
-      onDone: async (fullContent: string, toolCalls: AIToolCall[]) => {
-        // If there are tool calls, execute them and do a second pass
-        // Pass fullContent (initial LLM reasoning) so it's preserved in context
-        if (toolCalls.length > 0) {
-          await executeToolCallsAndRespond(toolCalls, messages, callbacks, fullContent);
-          return;
-        }
-
-        // No tool calls — parse the response directly
-        const parsed = parseAIResponse(fullContent);
-        const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
-
-        // Store the final response
-        memory.addAssistantEntry(parsed.text);
-
-        // Trigger UI component if needed
-        if (component) {
-          callbacks.onComponent(component as AIComponentType);
-        }
-
-        callbacks.onDone(parsed.text, component);
+      onDone: (fullContent: string, toolCalls: AIToolCall[]) => {
+        // Synchronously capture the final state from the stream.
+        // Tool execution and second LLM pass are handled AFTER
+        // createStreamingCompletion resolves, so they are properly awaited.
+        accumulatedContent = fullContent;
+        accumulatedToolCalls = toolCalls;
       },
       onError: (error: Error) => {
+        hadError = true;
         callbacks.onError(error.message);
       },
     }
   );
+
+  // If the stream encountered an error, don't proceed with tool execution
+  if (hadError) return;
+
+  // ── PHASE 2: Tool Execution + Second LLM Pass ───────────
+  // This runs AFTER createStreamingCompletion has fully resolved,
+  // so processWithAI's promise does NOT resolve until everything is done.
+
+  if (accumulatedToolCalls.length > 0) {
+    try {
+      await executeToolCallsAndRespond(accumulatedToolCalls, messages, callbacks, accumulatedContent);
+    } catch (err: unknown) {
+      callbacks.onError(
+        err instanceof Error ? err.message : "Tool execution failed unexpectedly"
+      );
+    }
+    return;
+  }
+
+  // ── PHASE 3: No Tool Calls — Parse Directly ─────────────
+  try {
+    const parsed = parseAIResponse(accumulatedContent);
+    const component = parsed.uiComponent ? AI_COMPONENT_TRIGGERS[parsed.uiComponent] || null : null;
+
+    // Store the final response
+    memory.addAssistantEntry(parsed.text);
+
+    // Trigger UI component if needed
+    if (component) {
+      callbacks.onComponent(component as AIComponentType);
+    }
+
+    callbacks.onDone(parsed.text, component);
+  } catch (err: unknown) {
+    callbacks.onError(
+      err instanceof Error ? err.message : "Failed to process AI response"
+    );
+  }
 }
 
 /* ─── Simple (Non-Streaming) Process ─────────────────────── */

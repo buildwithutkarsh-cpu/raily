@@ -1,7 +1,7 @@
 /* ══════════════════════════════════════════════════════════════
    RAILY — AI Health Check API Route
    
-   GET /api/ai/health
+   GET /api/ai Your messages you can tell/health
    
    Returns the status of the AI provider configuration:
    - configured: whether an API key is present
