@@ -119,7 +119,7 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
     type: "function",
     function: {
       name: "searchStations",
-      description: "Search for Indian railway stations by name or code. Returns station code, name, state, and zone. Use this to find station codes for train search.",
+      description: "RESOLVE station names to station codes. When a user says a station name like 'Delhi' or 'Mumbai', call this tool FIRST to get the official station code (like 'NDLS' or 'BCT'). Returns code, name, state, and zone. If the query matches multiple stations, present the options to the user.",
       strict: true,
       parameters: {
         type: "object",
@@ -135,13 +135,13 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
     type: "function",
     function: {
       name: "searchTrains",
-      description: "Search for trains between two stations on a given date. Returns train numbers, names, departure/arrival times, duration, and running days. Use this to find available trains for a journey.",
+      description: "Search for trains between two stations on a given date. Requires station CODES (like 'NDLS', 'BCT', 'JP'). If you only have station NAMES (like 'Delhi', 'Mumbai'), you MUST call searchStations FIRST to resolve each name to a code. Never ask the user for the code — resolve it yourself.",
       strict: true,
       parameters: {
         type: "object",
         properties: {
-          from: { type: "string", description: "Source station code (e.g. 'NDLS', 'BCT', 'JP')" },
-          to: { type: "string", description: "Destination station code (e.g. 'NDLS', 'BCT', 'JP')" },
+          from: { type: "string", description: "Source station CODE (e.g. 'NDLS', 'BCT', 'JP'). Do NOT pass station names — resolve names to codes first via searchStations." },
+          to: { type: "string", description: "Destination station CODE (e.g. 'NDLS', 'BCT', 'JP'). Do NOT pass station names — resolve names to codes first via searchStations." },
           date: { type: "string", description: "Date of journey in YYYY-MM-DD format (use today's date if not specified)" },
         },
         required: ["from", "to", "date"],

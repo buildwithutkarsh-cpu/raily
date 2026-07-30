@@ -12,7 +12,7 @@
      - No raw stack traces leaked to clients
    ══════════════════════════════════════════════════════════════ */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import nock from "nock";
 
