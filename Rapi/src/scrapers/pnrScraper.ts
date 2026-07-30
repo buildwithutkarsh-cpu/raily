@@ -101,7 +101,10 @@ async function solveCaptcha(): Promise<CaptchaParseResult> {
       .scale(2)
       .getBufferAsync(Jimp.MIME_PNG);
   } catch {
-    processedBuffer = imgBuffer;
+    // If Jimp can't read the image (e.g., empty/HTML response from upstream),
+    // throw immediately rather than passing bad data to tesseract.js which
+    // would crash with 'Error attempting to read image'
+    throw new Error("CAPTCHA_IMAGE_INVALID: Response was not a valid image");
   }
 
   const worker = await getTessWorker();
