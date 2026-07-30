@@ -52,5 +52,6 @@ test-output/
 
 # guides
 GUIDE_*.md
+eng.traineddata
 Rapi/eng.traineddata
 Rapi/dist/
