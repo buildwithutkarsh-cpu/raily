@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Compiled output of the self-hosted Rapi backend (has its own lint)
+    "Rapi/dist/**",
   ]),
 ]);
 

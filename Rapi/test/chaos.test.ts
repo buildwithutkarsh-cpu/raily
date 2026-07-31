@@ -21,7 +21,7 @@ import app from "../src/index";
 import { cache } from "../src/cache";
 
 // Track unhandled rejections
-let unhandledRejections: Error[] = [];
+const unhandledRejections: Error[] = [];
 
 beforeAll(() => {
   process.on("unhandledRejection", (reason) => {
@@ -63,7 +63,7 @@ describe("Chaos: Upstream HTTP Errors", () => {
 
     expect(res.body).toHaveProperty("success", false);
     expect(res.body).toHaveProperty("error");
-    expect(res.body).toHaveProperty("retryable", true);
+    expect(res.body.error).toHaveProperty("retryable", true);
     expect(unhandledRejections.length).toBe(0);
   });
 
@@ -78,7 +78,7 @@ describe("Chaos: Upstream HTTP Errors", () => {
 
     expect(res.body).toHaveProperty("success", false);
     expect(res.body).toHaveProperty("error");
-    expect(res.body).toHaveProperty("retryable", true);
+    expect(res.body.error).toHaveProperty("retryable", true);
     expect(unhandledRejections.length).toBe(0);
   });
 

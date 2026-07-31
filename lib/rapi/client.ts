@@ -106,14 +106,23 @@ class RapiApiClient {
         throw new RapiRateLimitError(retryAfter);
       }
       if (response.status === 502) {
-        // Rapi returns 502 for upstream scraping failures
+        // Rapi returns 502 for upstream scraping failures with the error
+        // details nested under body.error: { code, message, retryable }.
         const body = await response.json().catch(() => ({}));
+        const err =
+          body?.error && typeof body.error === "object" ? body.error : {};
+        const message =
+          typeof err.message === "string"
+            ? err.message
+            : typeof body?.error === "string"
+              ? body.error
+              : "Upstream scraping failed";
         return {
           success: false,
-          error: body.error || "Upstream scraping failed",
-          errorCode: body.errorCode || "RAPI_UPSTREAM",
-          errorMessage: body.errorMessage || "Railway data source is temporarily unavailable",
-          retryable: true,
+          error: message,
+          errorCode: typeof err.code === "string" ? err.code : "RAPI_UPSTREAM",
+          errorMessage: message,
+          retryable: typeof err.retryable === "boolean" ? err.retryable : true,
           cached: false,
         };
       }
@@ -122,9 +131,20 @@ class RapiApiClient {
       }
       if (response.status >= 500) {
         const body = await response.json().catch(() => ({}));
+        const err =
+          body?.error && typeof body.error === "object" ? body.error : {};
+        const message =
+          typeof err.message === "string"
+            ? err.message
+            : typeof body?.error === "string"
+              ? body.error
+              : `Rapi server error: ${response.statusText}`;
         return {
           success: false,
-          error: body.error || `Rapi server error: ${response.statusText}`,
+          error: message,
+          errorCode: typeof err.code === "string" ? err.code : "RAPI_ERROR",
+          errorMessage: message,
+          retryable: typeof err.retryable === "boolean" ? err.retryable : false,
           cached: false,
         };
       }
