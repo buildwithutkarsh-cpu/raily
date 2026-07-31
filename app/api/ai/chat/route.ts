@@ -28,6 +28,28 @@ interface ChatRequest {
   }>;
   tools?: Array<Record<string, unknown>>;
   stream?: boolean;
+  /** Explicit tool_choice override. Defaults to "auto" when tools present, "none" otherwise. */
+  tool_choice?: string;
+}
+
+/* ─── Groq Error Extraction ───────────────────────────────── */
+
+/**
+ * Groq returns 400 tool_use_failed / schema errors as a JSON body with
+ * { error: { message, code, type } }. Extract the human-readable message
+ * so the client can surface it instead of raw JSON.
+ */
+function extractErrorMessage(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw);
+    const message = parsed?.error?.message;
+    if (typeof message === "string" && message.trim()) {
+      return message.slice(0, 500);
+    }
+  } catch {
+    // Not JSON — fall through to raw text
+  }
+  return raw.slice(0, 300);
 }
 
 /* ─── Error Responses ────────────────────────────────────── */
@@ -102,9 +124,10 @@ function sanitizeToolDefinitions(tools: Array<Record<string, unknown>> | undefin
           schema.properties = {};
         }
 
-        if (schema.required && Array.isArray(schema.required) && schema.required.length === 0) {
-          delete schema.required;
-        }
+        // NOTE: do NOT delete empty `required` arrays. Groq strict-mode requires
+        // `required` to be supplied for every tool (including zero-property tools
+        // like getHealth, which must send `required: []`). Deleting it causes
+        // `invalid JSON schema for tool ...` errors.
 
         if (typeof schema.additionalProperties !== "boolean") {
           schema.additionalProperties = false;
@@ -137,7 +160,7 @@ async function callProviderCompletion(config: ReturnType<typeof getServerConfig>
     model: config.model,
     messages: body.messages,
     tools: normalizedTools && normalizedTools.length > 0 ? normalizedTools : undefined,
-    tool_choice: normalizedTools && normalizedTools.length > 0 ? "auto" : "none",
+    tool_choice: body.tool_choice ?? (normalizedTools && normalizedTools.length > 0 ? "auto" : "none"),
     max_tokens: config.maxTokens,
     temperature: config.temperature,
     stream: false,
@@ -157,7 +180,7 @@ async function callProviderCompletion(config: ReturnType<typeof getServerConfig>
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw { code: "AI_PROVIDER_ERROR", status: response.status, message: text.slice(0, 300), retryable: response.status >= 500 };
+    throw { code: "AI_PROVIDER_ERROR", status: response.status, message: extractErrorMessage(text), retryable: response.status >= 500 };
   }
 
   return response.json();
@@ -182,12 +205,13 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
     model: config.model,
     messages: body.messages,
     tools: normalizedTools && normalizedTools.length > 0 ? normalizedTools : undefined,
-    tool_choice: normalizedTools && normalizedTools.length > 0 ? "auto" : "none",
+    tool_choice: body.tool_choice ?? (normalizedTools && normalizedTools.length > 0 ? "auto" : "none"),
     max_tokens: config.maxTokens,
     temperature: config.temperature,
     stream: true,
   };
 
+  console.log(`[AI Chat] calling upstream provider: ${config.baseUrl}/chat/completions (model=${config.model})`);
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers,
@@ -195,49 +219,93 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
     signal: AbortSignal.timeout(60_000),
   });
 
+  console.log(`[AI Chat] upstream response: ${response.status} ${response.statusText}`);
+
   if (response.status === 429) {
     const retryAfter = parseInt(response.headers.get("Retry-After") || "30");
+    console.warn(`[AI Chat] rate limited, retry-after: ${retryAfter}s`);
     yield JSON.stringify({ type: "error", code: "AI_RATE_LIMIT", message: `Rate limited. Retry after ${retryAfter}s`, retryable: true });
     return;
   }
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    yield JSON.stringify({ type: "error", code: "AI_PROVIDER_ERROR", message: text.slice(0, 300), retryable: response.status >= 500 });
+    console.error(`[AI Chat] upstream error: ${response.status} - ${text.slice(0, 300)}`);
+    yield JSON.stringify({ type: "error", code: "AI_PROVIDER_ERROR", message: extractErrorMessage(text), retryable: response.status >= 500 });
     return;
   }
 
   const reader = response.body?.getReader();
   if (!reader) {
+    console.error("[AI Chat] no response body reader from upstream");
     yield JSON.stringify({ type: "error", code: "AI_NO_BODY", message: "No response body from provider" });
     return;
   }
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let lineCount = 0;
+  let doneReceived = false;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  // Add a stream-level timeout to prevent infinite hang
+  const streamTimeout = setTimeout(() => {
+    console.error("[AI Chat] STREAM TIMEOUT: no data for 90s, aborting reader");
+    reader.cancel("Stream timeout").catch(() => {});
+  }, 90_000);
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const data = line.slice(6).trim();
-      if (data === "[DONE]") {
-        yield JSON.stringify({ type: "done" });
-        continue;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log("[AI Chat] upstream reader done");
+        if (buffer.trim()) {
+          console.log("[AI Chat] flushing residual buffer", buffer);
+          const line = buffer.trim();
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6).trim();
+            if (data === "[DONE]") {
+              doneReceived = true;
+              console.log("[AI Chat] received [DONE] from upstream (flushed buffer)");
+              yield JSON.stringify({ type: "done" });
+            } else if (data) {
+              yield JSON.stringify({ type: "chunk", data });
+            }
+          }
+        }
+        break;
       }
-      if (!data) continue;
 
-      // Forward the raw chunk as-is — the client handles parsing
-      yield JSON.stringify({ type: "chunk", data });
+      clearTimeout(streamTimeout);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        lineCount++;
+        if (!line.startsWith("data: ")) continue;
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") {
+          doneReceived = true;
+          console.log("[AI Chat] received [DONE] from upstream");
+          yield JSON.stringify({ type: "done" });
+          continue;
+        }
+        if (!data) continue;
+
+        yield JSON.stringify({ type: "chunk", data });
+      }
     }
+  } catch (err: unknown) {
+    console.error("[AI Chat] error reading upstream stream:", err);
+    yield JSON.stringify({ type: "error", code: "AI_STREAM_READ_ERROR", message: err instanceof Error ? err.message : "Stream read failed" });
+  } finally {
+    clearTimeout(streamTimeout);
   }
 
+  if (!doneReceived) {
+    console.warn("[AI Chat] upstream closed without [DONE] marker");
+  }
+  console.log(`[AI Chat] stream completed: ${lineCount} SSE lines processed`);
   yield JSON.stringify({ type: "done" });
 }
 
@@ -258,8 +326,10 @@ export async function POST(request: NextRequest) {
   }
 
   // Get server-side config
+  console.log("[AI Chat] POST /api/ai/chat received", { stream: validation.data.stream });
   const config = getServerConfig();
   if (!config.apiKey) {
+    console.error("[AI Chat] missing API key");
     return errorResponse(
       "AI provider not configured. Set GROQ_API_KEY or OPENROUTER_API_KEY in .env.local",
       400,
@@ -271,11 +341,18 @@ export async function POST(request: NextRequest) {
   if (validation.data.stream) {
     const stream = new ReadableStream({
       async start(controller) {
+        console.log("[AI Chat] starting streaming response to client");
+        let chunkCount = 0;
         try {
           for await (const chunk of streamProviderCompletion(config, validation.data)) {
+            chunkCount++;
+            if (chunkCount === 1) console.log("[AI Chat] first chunk received from provider");
+            if (chunkCount % 50 === 0) console.log(`[AI Chat] forwarded ${chunkCount} chunks`);
             controller.enqueue(new TextEncoder().encode(chunk + "\n"));
           }
+          console.log(`[AI Chat] streamProviderCompletion completed, total chunks: ${chunkCount}`);
         } catch (err: unknown) {
+          console.error("[AI Chat] streamProviderCompletion threw:", err);
           controller.enqueue(
             new TextEncoder().encode(
               JSON.stringify({ type: "error", code: "AI_STREAM_ERROR", message: err instanceof Error ? err.message : "Stream failed" }) + "\n"
@@ -283,6 +360,7 @@ export async function POST(request: NextRequest) {
           );
         } finally {
           controller.close();
+          console.log("[AI Chat] streaming response closed");
         }
       },
     });
@@ -290,7 +368,8 @@ export async function POST(request: NextRequest) {
     return new Response(stream, {
       headers: {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
         Connection: "keep-alive",
       },
     });
@@ -310,6 +389,7 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (err: unknown) {
+    console.error("[AI Chat] non-streaming provider error:", err);
     const errRecord = err as Record<string, unknown>;
     if (errRecord?.code) {
       return errorResponse(

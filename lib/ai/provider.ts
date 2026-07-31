@@ -60,7 +60,8 @@ function getApiUrl(): string {
 export async function createCompletion(
   messages: AIMessage[],
   tools: AIToolDefinition[] = [],
-  requestId?: RequestId
+  requestId?: RequestId,
+  options?: { toolChoice?: "auto" | "none" }
 ): Promise<{
   content: string;
   toolCalls: AIToolCall[];
@@ -79,6 +80,7 @@ export async function createCompletion(
         messages,
         tools: tools.length > 0 ? tools : undefined,
         stream: false,
+        tool_choice: options?.toolChoice ?? (tools.length > 0 ? "auto" : "none"),
         _requestId: requestId, // Pass through for server-side logging
       }),
       signal: controller.signal,
@@ -205,6 +207,7 @@ export async function createStreamingCompletion(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
 
+    log?.info("createStreamingCompletion: fetching /api/ai/chat");
     const response = await fetch(getApiUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -218,6 +221,8 @@ export async function createStreamingCompletion(
     });
 
     clearTimeout(timeout);
+    log?.info(`createStreamingCompletion: received AI proxy response ${response.status} ${response.statusText}`);
+    log?.info(`createStreamingCompletion: response headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
 
     // Handle non-200 status codes
     if (response.status === 429) {
@@ -243,96 +248,112 @@ export async function createStreamingCompletion(
     // ── 3. Read the stream ─────────────────────────────────
     const reader = response.body?.getReader();
     if (!reader) {
+      log?.error("createStreamingCompletion: no response body reader available");
       safeComplete("error", new AIProviderError("No response body", "AI_NO_BODY"));
       return;
     }
 
     const decoder = new TextDecoder();
     let fullContent = "";
-    let toolCalls: AIToolCall[] = [];
+    const toolCalls: AIToolCall[] = [];
     let buffer = "";
     let streamError: Error | null = null;
+
+    const processLine = (line: string) => {
+      if (!line.trim()) return;
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        log?.warn(`Malformed stream line (${line.slice(0, 80)})`);
+        return;
+      }
+
+      const type = parsed.type;
+      log?.info(`createStreamingCompletion: parsed stream event type=${type}`);
+
+      if (type === "chunk") {
+        const data = parsed.data as string | undefined;
+        if (!data) return;
+
+        let chunk: Record<string, unknown>;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          log?.warn(`Malformed chunk data: ${(data as string)?.slice(0, 80)}`);
+          return;
+        }
+
+        const delta = (chunk.choices as Array<Record<string, unknown>>)?.[0]?.delta as Record<string, unknown> | undefined;
+
+        if (delta?.content) {
+          const textContent = delta.content as string;
+          fullContent += textContent;
+          callbacks.onChunk?.(textContent, requestId || "");
+        }
+
+        if (delta?.tool_calls) {
+          const rawToolCalls = delta.tool_calls as Array<Record<string, unknown>>;
+          for (const tc of rawToolCalls) {
+            const tcId = tc.id as string;
+            const existing = toolCalls.find((t) => t.id === tcId);
+            if (existing) {
+              existing.function.arguments += (tc.function as Record<string, unknown>)?.arguments || "";
+            } else {
+              const fnData = tc.function as Record<string, unknown> || {};
+              toolCalls.push({
+                id: tcId,
+                type: "function",
+                function: {
+                  name: (fnData.name as string) || "",
+                  arguments: (fnData.arguments as string) || "",
+                },
+              });
+            }
+          }
+        }
+      } else if (type === "done") {
+        // Stream complete signal from server
+      } else if (type === "error") {
+        streamError = new AIProviderError(
+          (parsed.message as string) || "AI stream error",
+          (parsed.code as string) || "AI_STREAM_ERROR"
+        );
+      }
+    };
 
     while (true) {
       let readResult: ReadableStreamReadResult<Uint8Array>;
       try {
-        readResult = await reader.read();
+        // Add per-read timeout to prevent client hang if server stream stalls
+        const readPromise = reader.read();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Stream read timeout (30s)")), 30_000)
+        );
+        readResult = await Promise.race([readPromise, timeoutPromise]);
       } catch (err: unknown) {
         streamError = err instanceof Error ? err : new Error("Stream read failed");
         break;
       }
 
       const { done, value } = readResult;
-      if (done) break;
+      if (done) {
+        log?.info("Stream reader returned done=true");
+        if (buffer.trim()) {
+          processLine(buffer);
+          buffer = "";
+        }
+        break;
+      }
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        if (!line.trim()) continue;
-
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          // Skip malformed JSON — log it but don't crash
-          log?.warn(`Malformed stream line (${line.slice(0, 80)})`);
-          continue;
-        }
-
-        const type = parsed.type;
-
-        if (type === "chunk") {
-          const data = parsed.data as string | undefined;
-          if (!data) continue;
-
-          let chunk: Record<string, unknown>;
-          try {
-            chunk = JSON.parse(data);
-          } catch {
-            log?.warn(`Malformed chunk data: ${(data as string)?.slice(0, 80)}`);
-            continue;
-          }
-
-          const delta = (chunk.choices as Array<Record<string, unknown>>)?.[0]?.delta as Record<string, unknown> | undefined;
-
-          if (delta?.content) {
-            const textContent = delta.content as string;
-            fullContent += textContent;
-            callbacks.onChunk?.(textContent, requestId || "");
-          }
-
-          if (delta?.tool_calls) {
-            const rawToolCalls = delta.tool_calls as Array<Record<string, unknown>>;
-            for (const tc of rawToolCalls) {
-              const tcId = tc.id as string;
-              const existing = toolCalls.find((t) => t.id === tcId);
-              if (existing) {
-                existing.function.arguments += (tc.function as Record<string, unknown>)?.arguments || "";
-              } else {
-                const fnData = tc.function as Record<string, unknown> || {};
-                toolCalls.push({
-                  id: tcId,
-                  type: "function",
-                  function: {
-                    name: (fnData.name as string) || "",
-                    arguments: (fnData.arguments as string) || "",
-                  },
-                });
-              }
-            }
-          }
-        } else if (type === "done") {
-          // Stream complete signal from server
-          // Continue reading to ensure all chunks are processed
-        } else if (type === "error") {
-          streamError = new AIProviderError(
-            (parsed.message as string) || "AI stream error",
-            (parsed.code as string) || "AI_STREAM_ERROR"
-          );
-          break;
-        }
+        processLine(line);
+        if (streamError) break;
       }
 
       if (streamError) break;

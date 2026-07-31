@@ -127,8 +127,13 @@ async function executeToolCallsAndRespond(
   scope.safeTransition(RequestState.SECOND_LLM_PASS);
   if (machine.isTerminated) return { content: initialContent, component: null };
 
-  // Second pass: get LLM response with tool results
-  const secondResponse = await createCompletion(messages, [], requestId);
+  // Second pass: get LLM response with tool results.
+  // IMPORTANT: RAILWAY_TOOLS MUST be re-sent. Groq validates that every
+  // tool_calls entry in the message history exists in request.tools, so
+  // omitting tools here causes `tool_use_failed: ... which was not in
+  // request.tools` (the exact error in the Groq logs). tool_choice "none"
+  // prevents the model from calling tools again on this pass.
+  const secondResponse = await createCompletion(messages, RAILWAY_TOOLS, requestId, { toolChoice: "none" });
 
   // ── PARSE_RESPONSE state ─────────────────────────────────
   scope.safeTransition(RequestState.PARSE_RESPONSE);
@@ -323,6 +328,7 @@ export async function processWithAI(
 
     // ── PHASE 2: Tool execution (if tool calls were detected) ──
     if (accumulatedToolCalls.length > 0) {
+      let returnedNormally = false;
       try {
         await executeToolCallsAndRespond(
           accumulatedToolCalls,
@@ -331,8 +337,24 @@ export async function processWithAI(
           scope,
           accumulatedContent
         );
+        returnedNormally = true;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Tool execution failed unexpectedly";
+        callbacks.onError(message, requestId);
+      }
+
+      // Safety net: fires ONLY when executeToolCallsAndRespond returned
+      // without throwing (so onError was not already emitted by the catch)
+      // but the machine was force-terminated mid-flight (timeout / cancel /
+      // invalid transition) without reaching COMPLETE. Guarantees the
+      // frontend's loading state is always cleared.
+      if (returnedNormally && machine.currentState !== RequestState.COMPLETE) {
+        const message =
+          machine.currentState === RequestState.TIMEOUT
+            ? "Request timed out while processing tool calls"
+            : machine.currentState === RequestState.CANCELLED
+            ? "Request was cancelled while processing tool calls"
+            : "Request failed while processing tool calls";
         callbacks.onError(message, requestId);
       }
       return;
@@ -453,7 +475,9 @@ export async function processWithAISimple(
       ];
 
       const secondResponse = await scope.runInState(RequestState.SECOND_LLM_PASS, async () => {
-        return createCompletion(secondMessages, [], requestId);
+        // Same as the streaming flow: tools must be re-sent or Groq rejects
+        // the historical tool_calls with `tool_use_failed`.
+        return createCompletion(secondMessages, RAILWAY_TOOLS, requestId, { toolChoice: "none" });
       });
 
       if (machine.isTerminated || !secondResponse) {

@@ -80,7 +80,11 @@ export const STATE_TRANSITIONS: Record<RequestState, RequestState[]> = {
   [RequestState.STREAMING]: [RequestState.TOOL_CALL_DETECTED, RequestState.PARSE_RESPONSE, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
   [RequestState.TOOL_CALL_DETECTED]: [RequestState.EXECUTE_TOOL, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
   [RequestState.EXECUTE_TOOL]: [RequestState.WAIT_FOR_TOOL_RESULT, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
-  [RequestState.WAIT_FOR_TOOL_RESULT]: [RequestState.SECOND_LLM_PASS, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
+  // Multiple tools in flight legitimately loop between EXECUTE_TOOL and
+  // WAIT_FOR_TOOL_RESULT (and parallel tool calls may land on WAIT_FOR_TOOL_RESULT
+  // while already there). Without these loops, a second tool call force-terminates
+  // the machine → early return without onDone/onError → UI hangs forever.
+  [RequestState.WAIT_FOR_TOOL_RESULT]: [RequestState.EXECUTE_TOOL, RequestState.WAIT_FOR_TOOL_RESULT, RequestState.SECOND_LLM_PASS, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
   [RequestState.SECOND_LLM_PASS]: [RequestState.PARSE_RESPONSE, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
   [RequestState.PARSE_RESPONSE]: [RequestState.EMIT_FRONTEND_EVENTS, RequestState.FINAL_RESPONSE_READY, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
   [RequestState.EMIT_FRONTEND_EVENTS]: [RequestState.FINAL_RESPONSE_READY, RequestState.ERROR, RequestState.CANCELLED, RequestState.TIMEOUT],
