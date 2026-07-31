@@ -12,8 +12,23 @@
    ══════════════════════════════════════════════════════════════ */
 
 import { getServerConfig } from "@/lib/ai/server-config";
+import { auth } from "@clerk/nextjs/server";
 
 export async function GET() {
+  // ── Authentication ────────────────────────────────────────
+  // Reveals AI provider configuration details (provider, model).
+  // Only signed-in users should be able to query it.
+  const { userId } = await auth();
+  if (!userId) {
+    return Response.json(
+      {
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "Authentication required", retryable: false },
+      },
+      { status: 401 }
+    );
+  }
+
   const start = performance.now();
   const config = getServerConfig();
   const configured = !!config.apiKey;

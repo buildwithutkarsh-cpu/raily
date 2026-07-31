@@ -62,6 +62,12 @@ async function executeToolCallsAndRespond(
   scope.safeTransition(RequestState.EXECUTE_TOOL);
   if (machine.isTerminated) return { content: initialContent, component: null };
 
+  // Persist the assistant message carrying these tool_calls BEFORE the tool
+  // results are stored. Without this, the next turn's reconstructed history
+  // contains tool messages whose tool_call_id has no preceding assistant
+  // tool_calls — Groq rejects that with `tool_use_failed` on turn 2.
+  memory.addAssistantEntry(initialContent, toolCalls);
+
   // Collect all browser events from tools for validation
   const pendingEvents: BrowserEvent[] = [];
 
@@ -320,6 +326,21 @@ export async function processWithAI(
       return;
     }
 
+    // Safety net: if the FSM was force-terminated mid-stream (timeout / cancel /
+    // invalid transition) without surfacing a streaming error (e.g. a slow-trickling
+    // stream stays alive past the pipeline timeout so the per-read 30s timeout never
+    // fires), still terminate with onError — never leave the UI loading forever.
+    if (machine.isTerminated) {
+      const message =
+        machine.currentState === RequestState.TIMEOUT
+          ? "Request timed out while streaming"
+          : machine.currentState === RequestState.CANCELLED
+          ? "Request was cancelled while streaming"
+          : "Request failed while streaming";
+      callbacks.onError(message, requestId);
+      return;
+    }
+
     // Read final states from the accumulator
     const accumulatedContent = accumulator.fullContent;
     const accumulatedToolCalls = accumulator.toolCalls;
@@ -340,6 +361,11 @@ export async function processWithAI(
         returnedNormally = true;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Tool execution failed unexpectedly";
+        // Ensure the machine lands in a terminal state so the request lifecycle
+        // always terminates (previously it could be left in SECOND_LLM_PASS).
+        if (!machine.isTerminated) {
+          machine.forceTerminate(RequestState.ERROR, message);
+        }
         callbacks.onError(message, requestId);
       }
 
@@ -437,9 +463,20 @@ export async function processWithAISimple(
       return { content: "Request failed", component: null, toolCalls: [] };
     }
 
+    // Mark the completion as received (STREAMING) so the FSM can legally
+    // proceed to TOOL_CALL_DETECTED or PARSE_RESPONSE next.
+    scope.safeTransition(RequestState.STREAMING);
+    if (machine.isTerminated) {
+      return { content: "Request failed", component: null, toolCalls: [] };
+    }
+
     // TOOL_CALL_DETECTED → EXECUTE_TOOL → SECOND_LLM_PASS
     if (firstResponse.toolCalls.length > 0) {
       scope.safeTransition(RequestState.TOOL_CALL_DETECTED);
+
+      // Persist the assistant tool_calls message BEFORE tool results so the
+      // reconstructed history keeps tool_call_id pairing valid on turn 2.
+      memory.addAssistantEntry("", firstResponse.toolCalls);
 
       const toolResults: AIMessage[] = [];
       const pendingEvents: BrowserEvent[] = [];
@@ -489,6 +526,11 @@ export async function processWithAISimple(
 
       memory.addAssistantEntry(parsed.text);
 
+      scope.safeTransition(RequestState.PARSE_RESPONSE);
+      if (machine.isTerminated) {
+        return { content: "Request failed", component: null, toolCalls: firstResponse.toolCalls };
+      }
+      scope.safeTransition(RequestState.FINAL_RESPONSE_READY);
       scope.safeTransition(RequestState.COMPLETE);
 
       return { content: parsed.text, component, toolCalls: firstResponse.toolCalls };
@@ -500,6 +542,11 @@ export async function processWithAISimple(
 
     memory.addAssistantEntry(parsed.text);
 
+    scope.safeTransition(RequestState.PARSE_RESPONSE);
+    if (machine.isTerminated) {
+      return { content: "Request failed", component: null, toolCalls: [] };
+    }
+    scope.safeTransition(RequestState.FINAL_RESPONSE_READY);
     scope.safeTransition(RequestState.COMPLETE);
 
     return { content: parsed.text, component, toolCalls: [] };

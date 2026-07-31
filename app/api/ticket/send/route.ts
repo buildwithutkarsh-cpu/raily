@@ -9,6 +9,7 @@
    ══════════════════════════════════════════════════════════════ */
 
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { Resend } from "resend";
 import { generateTicketPDF } from "@/lib/ticket/pdf";
 
@@ -44,6 +45,25 @@ interface SendTicketRequest {
 }
 
 export async function POST(request: NextRequest) {
+  // ── Authentication ────────────────────────────────────────
+  // This route sends emails (via Resend) and generates PDFs. Require a
+  // signed-in user so anonymous callers cannot use it as an email
+  // relay / PDF-generation service.
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: "UNAUTHORIZED",
+          message: "Authentication required",
+          retryable: false,
+        },
+      },
+      { status: 401 }
+    );
+  }
+
   try {
     const body: SendTicketRequest = await request.json();
 

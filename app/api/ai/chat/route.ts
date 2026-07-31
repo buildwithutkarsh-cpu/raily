@@ -15,7 +15,9 @@
    ══════════════════════════════════════════════════════════════ */
 
 import { NextRequest } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { getServerConfig } from "@/lib/ai/server-config";
+import { sanitizeToolDefinitions } from "@/lib/ai/tools";
 
 /* ─── Types ──────────────────────────────────────────────── */
 
@@ -91,54 +93,6 @@ function validateRequest(body: unknown): { valid: true; data: ChatRequest } | { 
   }
 
   return { valid: true, data: body as ChatRequest };
-}
-
-/* ─── Tool Schema Normalization ─────────────────────────── */
-
-function sanitizeToolDefinitions(tools: Array<Record<string, unknown>> | undefined) {
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return undefined;
-  }
-
-  return tools.map((tool) => {
-    if (!tool || typeof tool !== "object") {
-      return tool;
-    }
-
-    const toolRecord = tool as Record<string, unknown>;
-    const functionDefinition = toolRecord.function;
-
-    if (functionDefinition && typeof functionDefinition === "object") {
-      const functionRecord = functionDefinition as Record<string, unknown>;
-      const parameters = functionRecord.parameters;
-
-      if (parameters && typeof parameters === "object") {
-        const schema = parameters as Record<string, unknown>;
-
-        if (!schema.type || typeof schema.type !== "string") {
-          schema.type = "object";
-        }
-
-        const properties = schema.properties;
-        if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
-          schema.properties = {};
-        }
-
-        // NOTE: do NOT delete empty `required` arrays. Groq strict-mode requires
-        // `required` to be supplied for every tool (including zero-property tools
-        // like getHealth, which must send `required: []`). Deleting it causes
-        // `invalid JSON schema for tool ...` errors.
-
-        if (typeof schema.additionalProperties !== "boolean") {
-          schema.additionalProperties = false;
-        }
-
-        functionRecord.parameters = schema;
-      }
-    }
-
-    return toolRecord;
-  });
 }
 
 /* ─── OpenAI-Compatible Chat Completion Call ─────────────── */
@@ -303,15 +257,26 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
   }
 
   if (!doneReceived) {
+    // Upstream closed without a [DONE] marker (or errored mid-stream).
+    // Emit a terminal done so the client always sees the stream end.
     console.warn("[AI Chat] upstream closed without [DONE] marker");
+    yield JSON.stringify({ type: "done" });
   }
   console.log(`[AI Chat] stream completed: ${lineCount} SSE lines processed`);
-  yield JSON.stringify({ type: "done" });
 }
 
 /* ─── POST Handler ───────────────────────────────────────── */
 
 export async function POST(request: NextRequest) {
+  // ── Authentication ────────────────────────────────────────
+  // This route proxies AI provider requests, which consume paid API
+  // credits. Require a signed-in user so anonymous callers cannot
+  // abuse the proxy (burning GROQ/OPENROUTER quota).
+  const { userId } = await auth();
+  if (!userId) {
+    return errorResponse("Authentication required", 401, "UNAUTHORIZED");
+  }
+
   // Parse and validate request body
   let body: unknown;
   try {
@@ -353,13 +318,24 @@ export async function POST(request: NextRequest) {
           console.log(`[AI Chat] streamProviderCompletion completed, total chunks: ${chunkCount}`);
         } catch (err: unknown) {
           console.error("[AI Chat] streamProviderCompletion threw:", err);
-          controller.enqueue(
-            new TextEncoder().encode(
-              JSON.stringify({ type: "error", code: "AI_STREAM_ERROR", message: err instanceof Error ? err.message : "Stream failed" }) + "\n"
-            )
-          );
+          // If the client disconnected mid-stream, the controller is already
+          // closed/cancelled and enqueue throws ERR_INVALID_STATE. Swallow it
+          // so a client disconnect can never crash the route.
+          try {
+            controller.enqueue(
+              new TextEncoder().encode(
+                JSON.stringify({ type: "error", code: "AI_STREAM_ERROR", message: err instanceof Error ? err.message : "Stream failed" }) + "\n"
+              )
+            );
+          } catch {
+            console.warn("[AI Chat] client disconnected — error frame not delivered");
+          }
         } finally {
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Client already closed the connection — nothing left to do.
+          }
           console.log("[AI Chat] streaming response closed");
         }
       },

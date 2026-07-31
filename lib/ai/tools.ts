@@ -112,6 +112,89 @@ async function withRetry<T>(
   throw lastError;
 }
 
+/* ─── Tool Schema Sanitization ──────────────────────────── */
+
+/**
+ * Normalize tool definitions into a shape Groq/OpenAI strict-mode accepts.
+ * Groq validates EVERY tool schema on EVERY request — if any one tool is
+ * malformed (e.g. `required` present but `properties` missing), the entire
+ * request is rejected with errors like:
+ *
+ *   invalid JSON schema for tool getHealth
+ *   tools[7].function.parameters: 'required' present but 'properties' is missing
+ *
+ * This is the last line of defense before schemas leave the server:
+ * it GUARANTEES every tool has:
+ *   - parameters.type        === "object"
+ *   - parameters.properties  (always present, even as {})
+ *   - parameters.required    (always present, filtered to declared properties)
+ *   - parameters.additionalProperties === false
+ */
+export function sanitizeToolDefinitions(
+  tools: Array<Record<string, unknown>> | undefined
+): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return undefined;
+  }
+
+  // Clone every level before mutating so the source registry (e.g. the
+  // shared RAILWAY_TOOLS constant) is NEVER modified. Request bodies arrive
+  // as fresh JSON, but this function must be safe with any input.
+  return tools.map((tool) => {
+    if (!tool || typeof tool !== "object") {
+      return tool;
+    }
+
+    const toolRecord: Record<string, unknown> = { ...(tool as Record<string, unknown>) };
+    const functionDefinition = toolRecord.function;
+
+    if (functionDefinition && typeof functionDefinition === "object") {
+      const functionRecord: Record<string, unknown> = {
+        ...(functionDefinition as Record<string, unknown>),
+      };
+      toolRecord.function = functionRecord;
+
+      // Guarantee `parameters` is an object (clone before mutating).
+      const rawParameters = functionRecord.parameters;
+      const schema: Record<string, unknown> =
+        rawParameters && typeof rawParameters === "object" && !Array.isArray(rawParameters)
+          ? { ...(rawParameters as Record<string, unknown>) }
+          : {};
+      functionRecord.parameters = schema;
+
+      if (schema.type !== "object") {
+        schema.type = "object";
+      }
+
+      // Guarantee `properties` always exists (fixes 'required' present but
+      // 'properties' is missing).
+      const properties = schema.properties;
+      if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+        schema.properties = {};
+      }
+      const declaredProps = new Set(Object.keys(schema.properties as Record<string, unknown>));
+
+      // Guarantee `required` is an array whose entries only reference declared
+      // properties (fixes 'required' referencing non-existent properties).
+      if (Array.isArray(schema.required)) {
+        schema.required = (schema.required as unknown[]).filter(
+          (key): key is string => typeof key === "string" && declaredProps.has(key)
+        );
+      } else {
+        // Groq strict-mode requires `required` on every tool, including
+        // zero-property tools like getHealth, which must send `required: []`.
+        schema.required = [];
+      }
+
+      if (typeof schema.additionalProperties !== "boolean") {
+        schema.additionalProperties = false;
+      }
+    }
+
+    return toolRecord;
+  });
+}
+
 /* ─── Tool Definitions ───────────────────────────────────── */
 
 export const RAILWAY_TOOLS: AIToolDefinition[] = [
