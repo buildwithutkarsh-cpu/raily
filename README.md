@@ -1,47 +1,90 @@
+<div align="center">
+
 # RAILY
 
-RAILY is an AI-native travel assistant for Indian Railways. Users type conversational requests and the app surfaces train search results, PNR status, seat selection, ticket simulation, and journey tracking through an interactive chat-first UI.
+**An AI-native, conversational travel assistant for Indian Railways**
 
-## What is RAILY?
+Chat-first train search, PNR tracking, seat selection, and simulated ticketing — powered by an LLM tool-calling pipeline and a self-hosted railway data service.
 
-RAILY is not a traditional form-based booking site. It is a conversational operating layer that combines:
+`Node >= 22` · `Next.js 16` · `React 19` · `TypeScript` · `Tailwind v4` · `MIT License`
 
-- Natural-language train search and itinerary planning
-- Coach visualization and seat selection
-- PNR status lookup and booking history management
-- Journey tracking with schedule-based position estimates
-- PDF ticket generation and email delivery
-- A self-hosted railway data API service called `Rapi`
+</div>
 
-> Important: Booking is simulated. There is no real IRCTC booking integration. PNRs are generated deterministically and ticket delivery is simulated with a PDF/email workflow.
+---
+
+> ⚠️ **Booking is simulated.** There is no real IRCTC booking integration. PNRs are generated deterministically and ticket delivery is simulated through a PDF/email workflow. RAILY is a demonstration/utility project, not a substitute for official booking channels.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Architecture](#architecture)
+  - [Service Boundaries](#service-boundaries)
+  - [High-Level Diagram](#high-level-diagram)
+  - [AI Pipeline](#ai-pipeline)
+  - [Rapi Service](#rapi-service)
+- [Getting Started](#getting-started)
+  - [Requirements](#requirements)
+  - [Installation](#installation)
+  - [Environment Variables](#environment-variables)
+  - [Running the App](#running-the-app)
+  - [Running the Rapi Service](#running-the-rapi-service)
+- [Scripts](#scripts)
+- [Project Structure](#project-structure)
+- [Key Files](#key-files)
+- [Runtime Behavior](#runtime-behavior)
+- [Deployment](#deployment)
+- [Notes & Caveats](#notes--caveats)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Overview
+
+RAILY reimagines Indian Railways ticket search as a conversation rather than a form. Users describe what they need in plain language, and the app surfaces train search results, PNR status, coach/seat visualization, ticket simulation, and journey tracking through an interactive, chat-first UI.
+
+It is built as **two cooperating services**:
+
+1. A **Next.js application** — UI, AI orchestration, auth, PDF/email endpoints.
+2. **Rapi** — a self-hosted Express API that scrapes and caches Indian Railways data, kept isolated from the frontend.
+
+## Features
+
+- 🗣️ Natural-language train search and itinerary planning
+- 🚉 Coach visualization and interactive seat selection
+- 🎫 PNR status lookup and booking history management
+- 📍 Journey tracking with schedule-based position estimates
+- 📄 PDF ticket generation with optional email delivery
+- 🔌 Pluggable AI provider (Groq or OpenRouter)
+- 🛡️ Self-hosted data layer with rate limiting and admin controls
 
 ## Tech Stack
 
-- Next.js 16 / React 19 / TypeScript
-- Tailwind CSS v4
-- Clerk for authentication
-- Resend for email delivery
-- Groq (default) or OpenRouter AI provider
-- `pdfkit` for ticket generation
-- TanStack React Query for client-side data fetching
-- Self-hosted Rapi service for Indian Railways data scraping and caching
-- Vitest for tests
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16, React 19, TypeScript |
+| Styling | Tailwind CSS v4 |
+| Auth | Clerk |
+| Email | Resend |
+| AI Provider | Groq (default) or OpenRouter |
+| PDF Generation | `pdfkit` |
+| Data Fetching | TanStack React Query |
+| Railway Data | Self-hosted `Rapi` service (Express) |
+| Testing | Vitest |
+
 ## Architecture
 
-RAILY is built as two cooperating services:
+### Service Boundaries
 
-- `Next.js App` — front-end UI, AI orchestration, Clerk auth, email/PDF endpoints
-- `Rapi` — self-hosted railway data API for train search, live status, PNR lookup, availability, and fare data
+| File | Responsibility |
+|---|---|
+| `app/api/ai/chat/route.ts` | Proxies AI requests to the configured provider (Groq/OpenRouter) so API keys never reach the browser |
+| `app/api/ai/health/route.ts` | Verifies provider configuration and reachability |
+| `app/api/ticket/send/route.ts` | Generates ticket PDFs and sends email via Resend when configured |
+| `lib/rapi/client.ts` | Single source of truth for all railway data requests |
+| `Rapi/src/index.ts` | Boots an Express service with strict CORS, rate limiting, optional API key protection, and structured JSON responses |
 
-### Service boundaries
-
-- `app/api/ai/chat/route.ts` proxies AI requests to the configured provider (Groq or OpenRouter) so API keys never reach the browser.
-- `app/api/ai/health/route.ts` verifies provider configuration and reachability.
-- `app/api/ticket/send/route.ts` generates ticket PDFs and sends email via Resend when configured.
-- `lib/rapi/client.ts` is the single source of truth for all railway data requests.
-- `Rapi/src/index.ts` boots an Express service with strict CORS, rate limiting, optional API key protection, and structured JSON responses.
-
-### High-level architecture
+### High-Level Diagram
 
 ```
 Browser (Client)
@@ -53,8 +96,8 @@ Browser (Client)
             ├─ /api/ai/chat
             ├─ /api/ai/health
             └─ /api/ticket/send
-                ↘ AI provider / Email provider
-                    ↘ Groq/OpenRouter / Resend
+                 ↘ AI provider / Email provider
+                     ↘ Groq/OpenRouter / Resend
 
 Rapi service
   └─ Express API
@@ -64,80 +107,79 @@ Rapi service
        └─ /api/v1/admin/*
 ```
 
-### AI pipeline
+### AI Pipeline
 
-The core user flow is chat-first and tool-driven. The app sends user messages to the AI proxy, streams provider responses back to the UI, and executes tools when the model requests them.
+The core user flow is chat-first and tool-driven:
 
-- `BookingStore` manages state and chat history
-- `processWithAI()` handles streaming text, tool calls, and browser events
-- Tools include train search, station lookup, live status, availability, PNR status, fare lookup, booking confirmation, ticket download, and email delivery
-- Every tool returns a standard result object and may emit browser events rather than manipulating UI directly
+1. `BookingStore` manages conversation state and chat history.
+2. `processWithAI()` handles streaming text, tool calls, and browser events.
+3. Available tools: train search, station lookup, live status, availability, PNR status, fare lookup, booking confirmation, ticket download, and email delivery.
+4. Every tool returns a standard result object and may emit browser events rather than manipulating the UI directly.
 
-### Rapi service
+### Rapi Service
 
-The Rapi service is a separate Express-based scraper API designed to keep Indian Railways data access isolated from the frontend.
+A separate Express-based scraper API that keeps Indian Railways data access isolated from the frontend.
 
 - Uses cached, scraped railway data from sources like erail.in
 - Supports station autocomplete, train search, train info, live status, availability, fare, and PNR lookup
 - Includes a protected admin surface and strict rate limiting
-- The app defaults to `http://localhost:3001`, but `NEXT_PUBLIC_RAPI_BASE_URL` can override it
-
-### Deployment notes
-
-- `vercel.json` is included for Vercel-style deployment of the Next.js app
-- `next.config.ts` treats `pdfkit` as an external package so font metrics and PDF assets survive server bundling
-- The Rapi service can be deployed independently if you want the data layer separated from the app
+- Defaults to `http://localhost:3001`; override via `NEXT_PUBLIC_RAPI_BASE_URL`
 
 ## Getting Started
 
 ### Requirements
 
-- Node.js 22+ (recommended)
+- Node.js **22+** (recommended)
 - npm
-- A Clerk application for authentication
-- A supported AI provider key (Groq or OpenRouter) for AI chat
-- Resend API key for email delivery (optional, but required for email ticket sending)
+- A [Clerk](https://clerk.com) application for authentication
+- An AI provider key — [Groq](https://groq.com) or [OpenRouter](https://openrouter.ai)
+- A [Resend](https://resend.com) API key for email delivery *(optional — required only for emailed tickets)*
 
-### Install dependencies
+### Installation
 
 ```bash
+git clone https://github.com/<your-org>/raily.git
+cd raily
 npm install
 ```
 
-### Environment variables
+### Environment Variables
 
-Create a `.env.local` file in the project root.
-
-Recommended variables:
+Create a `.env.local` file in the project root:
 
 ```env
+# Auth (Clerk)
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_xxx
 CLERK_SECRET_KEY=sk_live_xxx
 
+# AI provider
 AI_PROVIDER=groq
 GROQ_API_KEY=sk_xxx
 # or
 # AI_PROVIDER=openrouter
 # OPENROUTER_API_KEY=sk_xxx
 
+# Email (optional)
 RESEND_API_KEY=rm_...
 RESEND_FROM_EMAIL=onboarding@resend.dev
 
-# Optional Rapi service URL override
+# Rapi service override (optional)
 NEXT_PUBLIC_RAPI_BASE_URL=http://localhost:3001
 ```
 
-### Running the app
+> 🔒 Never commit `.env.local` or any file containing secrets.
+
+### Running the App
 
 ```bash
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000).
 
-### Running the Rapi service
+### Running the Rapi Service
 
-The `Rapi/` service is designed to run separately for railway data.
+Rapi runs as a separate service for railway data:
 
 ```bash
 cd Rapi
@@ -145,36 +187,35 @@ npm install
 npm run dev
 ```
 
-By default, the app expects Rapi at `http://localhost:3001`, but you can change that with `NEXT_PUBLIC_RAPI_BASE_URL`.
+By default, the app expects Rapi at `http://localhost:3001`; override with `NEXT_PUBLIC_RAPI_BASE_URL` if needed.
 
 ## Scripts
 
-### App scripts
+### App
 
-```bash
-npm run dev       # start Next.js development server
-npm run build     # production build
-npm run start     # run production build locally
-npm run lint      # run ESLint
-npm run test      # run Vitest tests
-npm run test:watch
-```
+| Command | Description |
+|---|---|
+| `npm run dev` | Start the Next.js development server |
+| `npm run build` | Production build |
+| `npm run start` | Run the production build locally |
+| `npm run lint` | Run ESLint |
+| `npm run test` | Run Vitest tests |
+| `npm run test:watch` | Run tests in watch mode |
 
-### Rapi scripts
+### Rapi
 
-```bash
-cd Rapi
-npm run dev
-npm run build
-npm run start
-npm run test
-npm run test:security
-npm run test:chaos
-npm run test:memory
-npm run test:headers
-```
+| Command | Description |
+|---|---|
+| `npm run dev` | Start Rapi in development mode |
+| `npm run build` | Build Rapi |
+| `npm run start` | Run built Rapi service |
+| `npm run test` | Run Rapi tests |
+| `npm run test:security` | Security-focused test suite |
+| `npm run test:chaos` | Chaos/resilience tests |
+| `npm run test:memory` | Memory usage tests |
+| `npm run test:headers` | HTTP header compliance tests |
 
-## Project structure
+## Project Structure
 
 ```text
 .
@@ -184,41 +225,55 @@ npm run test:headers
 ├── Rapi/                # self-hosted railway data service
 ├── public/              # static assets (if present)
 ├── README.md
-├── ARCHITECTURE.md
 ├── next.config.ts
 └── package.json
 ```
 
-## Key files and folders
+## Key Files
 
-- `app/page.tsx` — landing page and marketing entry
-- `app/app/layout.tsx` — protected app shell with Clerk integration
-- `app/api/ai/chat/route.ts` — AI proxy route
-- `app/api/ai/health/route.ts` — AI health endpoint
-- `app/api/ticket/send/route.ts` — ticket generation and email API
-- `lib/ai/server-config.ts` — provider configuration and API key handling
-- `lib/rapi/client.ts` — single source of truth for Rapi requests
-- `Rapi/src/index.ts` — Rapi service bootstrap and route registration
+| Path | Purpose |
+|---|---|
+| `app/page.tsx` | Landing page and marketing entry |
+| `app/app/layout.tsx` | Protected app shell with Clerk integration |
+| `app/api/ai/chat/route.ts` | AI proxy route |
+| `app/api/ai/health/route.ts` | AI health endpoint |
+| `app/api/ticket/send/route.ts` | Ticket generation and email API |
+| `lib/ai/server-config.ts` | Provider configuration and API key handling |
+| `lib/rapi/client.ts` | Single source of truth for Rapi requests |
+| `Rapi/src/index.ts` | Rapi service bootstrap and route registration |
 
-## Runtime behavior
+## Runtime Behavior
 
-- The app uses Clerk middleware (`proxy.ts`) to protect `/app` routes.
-- The AI provider is configured server-side, and calls are proxied through `/api/ai/chat`.
+- Clerk middleware (`proxy.ts`) protects all `/app` routes.
+- The AI provider is configured server-side; calls are proxied through `/api/ai/chat` so keys never reach the client.
 - Railway data is fetched via the Rapi service and accessed through typed client wrappers.
-- Ticket generation is handled server-side with `pdfkit`, and email delivery is optional via Resend.
-
-## Notes
-
-- This app is built around Indian Railways workflows, but it uses scraping and simulated booking logic.
-- Do not commit API keys or secrets. Keep them in `.env.local`.
-- If Resend is not configured, users can still download generated PDF tickets.
-- Rapi may require its own environment variables when run separately; see `Rapi/` for details.
+- Ticket generation runs server-side with `pdfkit`; email delivery is optional via Resend.
 
 ## Deployment
 
-- The app includes `vercel.json` for Vercel-style deployment.
-- `next.config.ts` marks `pdfkit` as an external package so PDF assets are preserved during server bundling.
+- `vercel.json` is included for Vercel-style deployment of the Next.js app.
+- `next.config.ts` marks `pdfkit` as an external package so font metrics and PDF assets survive server bundling.
+- The Rapi service can be deployed independently if you want the data layer separated from the app.
 
-## Further reading
-- `Rapi/` — Indian Railways data service implementation and test coverage
-- `app/` and `lib/` — AI orchestration and chat-first application logic
+## Notes & Caveats
+
+- This project targets Indian Railways workflows but relies on scraping and **simulated booking logic** — it is not connected to IRCTC.
+- If Resend is not configured, users can still download generated PDF tickets directly.
+- Rapi may require its own environment variables when run separately — see [`Rapi/`](./Rapi) for details.
+- Do not commit API keys or secrets; keep them in `.env.local`.
+
+## Contributing
+
+Contributions are welcome! To get started:
+
+1. Fork the repository and create a feature branch.
+2. Run `npm install` in both the root and `Rapi/` directories.
+3. Make your changes, adding tests where relevant (`npm run test`).
+4. Run `npm run lint` before opening a PR.
+5. Open a pull request describing the change and its motivation.
+
+Please open an issue first for large or breaking changes so we can discuss the approach.
+
+## License
+
+Distributed under the [MIT License](./LICENSE).
