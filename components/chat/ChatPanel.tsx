@@ -191,25 +191,6 @@ function MessageContent({
       {message.streaming && !message.content && (
         <LoadingDots />
       )}
-
-      {/* Suggestions for welcome */}
-      {message.component === "welcome" && onSuggestionClick && (
-        <div className="flex flex-wrap gap-2">
-          {[
-            "Book Delhi to Jaipur tomorrow",
-            "Check PNR status",
-            "Track my train",
-          ].map((suggestion) => (
-            <button
-              key={suggestion}
-              onClick={() => onSuggestionClick(suggestion)}
-              className="px-3 py-1.5 text-xs text-[var(--muted)] border border-[var(--border)] hover:border-[var(--fg)] hover:text-[var(--fg)] transition-colors"
-            >
-              {suggestion}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
