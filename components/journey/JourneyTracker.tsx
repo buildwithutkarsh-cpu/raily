@@ -1,28 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { MapPin, Train } from "lucide-react";
+import { MapPin, Train, RefreshCw } from "lucide-react";
 import { useBooking } from "@/lib/booking-store";
 import * as rapi from "@/lib/rapi/endpoints";
 import { transformLiveStatus } from "@/lib/rapi/transform";
 import type { JourneyInfo } from "@/lib/rapi/transform";
-
-/* Fallback mock data */
-
-const FALLBACK: JourneyInfo = {
-  trainNo: "12951",
-  trainName: "Rajdhani Express",
-  date: "2026-07-29",
-  currentStationName: "Delhi (NDLS)",
-  delay: 0,
-  timeline: [
-    { code: "NDLS", name: "Delhi (NDLS)", scheduledArrival: "--", scheduledDeparture: "06:25", distance: 0, day: 1, platform: "5", delay: 0, status: "passed" },
-    { code: "MTJ", name: "Mathura (MTJ)", scheduledArrival: "07:50", scheduledDeparture: "07:52", distance: 141, day: 1, platform: "2", delay: 0, status: "passed" },
-    { code: "AGC", name: "Agra (AGC)", scheduledArrival: "08:40", scheduledDeparture: "08:45", distance: 199, day: 1, platform: "3", delay: 0, status: "current" },
-    { code: "BTE", name: "Bharatpur (BTE)", scheduledArrival: "09:30", scheduledDeparture: "09:32", distance: 271, day: 1, platform: "1", delay: 0, status: "upcoming" },
-    { code: "JP", name: "Jaipur (JP)", scheduledArrival: "11:50", scheduledDeparture: "--", distance: 431, day: 1, platform: "1", delay: 0, status: "upcoming" },
-  ],
-};
 
 /* Loading skeleton */
 
@@ -52,12 +35,43 @@ function JourneySkeleton() {
   );
 }
 
+/* Honest empty / error states — never fabricated journey data */
+
+function JourneyNoTrain() {
+  return (
+    <div className="border border-[var(--border)] p-6 flex flex-col items-center text-center space-y-2">
+      <Train className="h-5 w-5 text-[var(--muted)]" />
+      <p className="text-sm font-medium">No train to track</p>
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+        Select a train or ask the assistant to track a specific train (e.g. "Track
+        12951") and its journey estimate will appear here.
+      </p>
+    </div>
+  );
+}
+
+function JourneyFetchError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="border border-[var(--railway-red)]/30 bg-[var(--railway-red-light)] p-6 flex flex-col items-center text-center space-y-2">
+      <p className="text-sm font-medium">Couldn't load journey estimate</p>
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">{message}</p>
+      <button
+        onClick={onRetry}
+        className="mt-1 inline-flex items-center gap-1.5 text-[10px] text-[var(--muted)] font-mono hover:text-[var(--fg)] transition-colors underline underline-offset-2"
+      >
+        <RefreshCw className="h-3 w-3" /> Retry
+      </button>
+    </div>
+  );
+}
+
 /* Journey Tracker */
 
 export default function JourneyTracker() {
   const { state } = useBooking();
   const [journey, setJourney] = useState<JourneyInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   // Real train number — from the selected train, or resolved from the PNR
   // via a lookup (PNR digits are NOT a train number, so we never slice them).
   const [trainNumber, setTrainNumber] = useState<string | null>(
@@ -96,16 +110,22 @@ export default function JourneyTracker() {
   }, [state.selectedTrain?.number, state.pnrNumber]);
 
   const fetchJourney = async () => {
+    if (!trainNumber) {
+      // No train identified — exit the loading state so the empty state shows.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
-      const result = await rapi.getLiveStatus(trainNumber || "12951");
+      const result = await rapi.getLiveStatus(trainNumber);
       if (result.success && result.data) {
         setJourney(transformLiveStatus(result.data));
       } else {
-        setJourney(FALLBACK);
+        setError(result.error || "Journey estimate could not be fetched. Please try again.");
       }
-    } catch {
-      setJourney(FALLBACK);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Journey estimate could not be fetched. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -118,7 +138,15 @@ export default function JourneyTracker() {
 
   if (loading) return <JourneySkeleton />;
 
-  const data = journey || FALLBACK;
+  // No train could be identified — show guidance instead of a fake journey.
+  if (!trainNumber) return <JourneyNoTrain />;
+
+  // Fetch failed (or returned no data) — show the real failure, never mock data.
+  if (error || !journey) {
+    return <JourneyFetchError message={error || "No journey data was returned."} onRetry={fetchJourney} />;
+  }
+
+  const data = journey;
   const timeline = data.timeline || [];
 
   return (
