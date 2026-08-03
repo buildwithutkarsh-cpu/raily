@@ -171,7 +171,8 @@ class Cache {
       return { data: fresh, cached: true, fromStale: true };
     }
 
-    this.telemetry.misses++;
+    // NOTE: this.get() above already incremented `misses` for the cache
+    // miss, so we must NOT count it again here (double-count bug).
     const freshData = await fetcher();
     this.set(key, freshData, ttl);
     return { data: freshData, cached: false, fromStale: false };
