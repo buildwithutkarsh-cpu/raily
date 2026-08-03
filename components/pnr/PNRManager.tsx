@@ -2,30 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { useBooking } from "@/lib/booking-store";
-import { Check, Clock } from "lucide-react";
+import { Check, Clock, Search, RefreshCw } from "lucide-react";
 import * as rapi from "@/lib/rapi/endpoints";
 import { transformPNR, type PNRActionInfo } from "@/lib/rapi/transform";
-
-/* ─── Fallback Mock Data ───────────────────────────────────── */
-
-const FALLBACK: PNRActionInfo = {
-  pnr: "4681234567",
-  trainName: "Mumbai Rajdhani Express",
-  trainNumber: "12951",
-  date: "28 Jul 2026",
-  fromName: "Delhi (NDLS)",
-  fromCode: "NDLS",
-  toName: "Mumbai (BCT)",
-  toCode: "BCT",
-  className: "3A",
-  quota: "GN",
-  chartPrepared: false,
-  fare: 1940,
-  passengers: [
-    { number: 1, bookingStatus: "CNF", currentStatus: "CNF", coach: "B1", berth: "B1-7 (Lower)" },
-    { number: 2, bookingStatus: "CNF", currentStatus: "CNF", coach: "B1", berth: "B1-8 (Upper)" },
-  ],
-};
 
 /* ─── Helpers ──────────────────────────────────────────────── */
 
@@ -88,26 +67,66 @@ function PNRSkeleton() {
   );
 }
 
+/* ─── Honest Empty / Error States ─────────────────────────── */
+
+function PNRNoPnr() {
+  return (
+    <div className="border border-[var(--border)] p-6 flex flex-col items-center text-center space-y-2">
+      <Search className="h-5 w-5 text-[var(--muted)]" />
+      <p className="text-sm font-medium">No PNR to check</p>
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+        Ask the assistant to check a PNR status (e.g. "Check PNR 1234567890") and the
+        details will appear here.
+      </p>
+    </div>
+  );
+}
+
+function PNRFetchError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="border border-[var(--railway-red)]/30 bg-[var(--railway-red-light)] p-6 flex flex-col items-center text-center space-y-2">
+      <p className="text-sm font-medium">Couldn't load PNR status</p>
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">{message}</p>
+      <button
+        onClick={onRetry}
+        className="mt-1 inline-flex items-center gap-1.5 text-[10px] text-[var(--muted)] font-mono hover:text-[var(--fg)] transition-colors underline underline-offset-2"
+      >
+        <RefreshCw className="h-3 w-3" /> Retry
+      </button>
+    </div>
+  );
+}
+
 /* ─── PNR Manager ──────────────────────────────────────────── */
 
 export default function PNRManager() {
   const { state } = useBooking();
   const [data, setData] = useState<PNRActionInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const pnr = state.pnrNumber || "4681234567";
+  // The PNR the user actually asked about — set by the getPnrStatus tool
+  // result (pnrBeingChecked) or the confirmed booking (pnrNumber). No fake
+  // default: if neither exists, we show an honest empty state.
+  const pnr = state.pnrBeingChecked || state.pnrNumber;
 
   const fetchPNR = async () => {
+    if (!pnr) {
+      // No PNR available — exit the loading state so the empty state shows.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
       const result = await rapi.getPNRStatus(pnr);
       if (result.success && result.data) {
         setData(transformPNR(result.data));
       } else {
-        setData(FALLBACK);
+        setError(result.error || "PNR status could not be fetched. Please try again.");
       }
-    } catch {
-      setData(FALLBACK);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PNR status could not be fetched. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -119,7 +138,15 @@ export default function PNRManager() {
 
   if (loading) return <PNRSkeleton />;
 
-  const info = data || FALLBACK;
+  // No PNR was ever checked — show guidance instead of a fake confirmation.
+  if (!pnr) return <PNRNoPnr />;
+
+  // Fetch failed (or returned no data) — show the real failure, never mock data.
+  if (error || !data) {
+    return <PNRFetchError message={error || "No PNR data was returned."} onRetry={fetchPNR} />;
+  }
+
+  const info = data;
   const status = computeStatus(info.passengers);
 
   return (

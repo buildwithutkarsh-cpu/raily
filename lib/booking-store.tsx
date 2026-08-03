@@ -113,6 +113,9 @@ export interface BookingState {
   seatRecommendation: SeatRecommendation | null;
   bookingConfirmed: boolean;
   pnrNumber: string | null;
+  /** PNR set from a successful getPnrStatus tool call — lets PNRManager
+   *  display the actual PNR the user asked about (never a fake default). */
+  pnrBeingChecked: string | null;
   isProcessing: boolean;
   messages: Message[];
   rapiConnected: boolean;
@@ -184,7 +187,7 @@ function createWelcomeMessage(): Message {
 const defaultState: BookingState = {
   step: "idle", query: null, trains: [], selectedTrain: null,
   selectedCoach: "B1", selectedSeat: null, seatRecommendation: null,
-  bookingConfirmed: false, pnrNumber: null, isProcessing: false,
+  bookingConfirmed: false, pnrNumber: null, pnrBeingChecked: null, isProcessing: false,
   messages: [createWelcomeMessage()], rapiConnected: false, rapiError: null,
   aiConfigured: false, aiError: null,
 };
@@ -345,6 +348,16 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       const searchState = buildSearchStateFromToolData(result.data as Record<string, unknown>);
       if (searchState) {
         setState((prev) => ({ ...prev, trains: searchState.trains, query: searchState.query }));
+      }
+      return;
+    }
+
+    // getPnrStatus → remember which PNR the AI actually checked so the
+    // PNR panel shows the real PNR (previously it fell back to a fake one).
+    if (toolName === "getPnrStatus" && result.success) {
+      const checkedPnr = (args.pnr as string) || ((result.data as Record<string, unknown> | null)?.pnr as string);
+      if (checkedPnr) {
+        setState((prev) => ({ ...prev, pnrBeingChecked: checkedPnr }));
       }
       return;
     }
