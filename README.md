@@ -50,13 +50,13 @@ It is built as **two cooperating services**:
 
 ## Features
 
-- 🗣️ Natural-language train search and itinerary planning
-- 🚉 Coach visualization and interactive seat selection
-- 🎫 PNR status lookup and booking history management
-- 📍 Journey tracking with schedule-based position estimates
-- 📄 PDF ticket generation with optional email delivery
-- 🔌 Pluggable AI provider (Groq or OpenRouter)
-- 🛡️ Self-hosted data layer with rate limiting and admin controls
+-  Natural-language train search and itinerary planning
+-  Coach visualization and interactive seat selection
+-  PNR status lookup and booking history management
+-  Journey tracking with schedule-based position estimates
+-  PDF ticket generation with optional email delivery
+-  Pluggable AI provider (Groq or OpenRouter)
+-  Self-hosted data layer with rate limiting and admin controls
 
 ## Tech Stack
 
@@ -167,7 +167,7 @@ RESEND_FROM_EMAIL=onboarding@resend.dev
 NEXT_PUBLIC_RAPI_BASE_URL=http://localhost:3001
 ```
 
-> 🔒 Never commit `.env.local` or any file containing secrets.
+>  Never commit `.env.local` or any file containing secrets.
 
 ### Running the App
 
@@ -274,6 +274,3 @@ Contributions are welcome! To get started:
 
 Please open an issue first for large or breaking changes so we can discuss the approach.
 
-## License
-
-Distributed under the [MIT License](./LICENSE).
