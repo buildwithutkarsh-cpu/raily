@@ -158,7 +158,7 @@ export default function BookingConfirmation() {
             addMessage({
               id: `msg-journey-${Date.now()}`,
               role: "assistant",
-              content: `Tracking **${train?.name || "your train"}** in real-time:`,
+              content: `Tracking **${train?.name || "your train"}** (schedule-based estimate):`,
               component: "journey-tracker",
               timestamp: Date.now(),
             });
@@ -166,7 +166,7 @@ export default function BookingConfirmation() {
           className="flex items-center gap-1.5 px-3 py-2 text-xs border border-[var(--border)] hover:border-[var(--fg)] transition-colors"
         >
           <Clock className="h-3.5 w-3.5" />
-          Live Tracking
+          Track Journey
         </button>
         <button
           onClick={resetBooking}

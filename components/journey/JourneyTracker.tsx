@@ -17,8 +17,8 @@ const FALLBACK: JourneyInfo = {
   delay: 0,
   timeline: [
     { code: "NDLS", name: "Delhi (NDLS)", scheduledArrival: "--", scheduledDeparture: "06:25", distance: 0, day: 1, platform: "5", delay: 0, status: "passed" },
-    { code: "MTJ", name: "Mathura (MTJ)", scheduledArrival: "07:50", scheduledDeparture: "07:52", distance: 141, day: 1, platform: "2", delay: 2, status: "passed" },
-    { code: "AGC", name: "Agra (AGC)", scheduledArrival: "08:40", scheduledDeparture: "08:45", distance: 199, day: 1, platform: "3", delay: 5, status: "current" },
+    { code: "MTJ", name: "Mathura (MTJ)", scheduledArrival: "07:50", scheduledDeparture: "07:52", distance: 141, day: 1, platform: "2", delay: 0, status: "passed" },
+    { code: "AGC", name: "Agra (AGC)", scheduledArrival: "08:40", scheduledDeparture: "08:45", distance: 199, day: 1, platform: "3", delay: 0, status: "current" },
     { code: "BTE", name: "Bharatpur (BTE)", scheduledArrival: "09:30", scheduledDeparture: "09:32", distance: 271, day: 1, platform: "1", delay: 0, status: "upcoming" },
     { code: "JP", name: "Jaipur (JP)", scheduledArrival: "11:50", scheduledDeparture: "--", distance: 431, day: 1, platform: "1", delay: 0, status: "upcoming" },
   ],
@@ -119,7 +119,6 @@ export default function JourneyTracker() {
   if (loading) return <JourneySkeleton />;
 
   const data = journey || FALLBACK;
-  const delay = data.delay;
   const timeline = data.timeline || [];
 
   return (
@@ -133,12 +132,12 @@ export default function JourneyTracker() {
           <div>
             <p className="text-sm font-medium">{data.trainName}</p>
             <p className="text-[10px] text-[var(--muted)] font-mono">
-              {data.trainNo} · {delay > 0 ? `${delay} min late` : "On time"}
+              {data.trainNo} · Schedule-based estimate
             </p>
           </div>
         </div>
-        <span className={`text-[10px] px-2 py-1 border border-[var(--border)] font-mono ${delay > 0 ? "text-[var(--railway-red)]" : ""}`}>
-          {delay > 0 ? "DELAYED" : "ONTIME"}
+        <span className="text-[10px] px-2 py-1 border border-[var(--border)] font-mono text-[var(--muted)]">
+          ESTIMATE
         </span>
       </div>
 
@@ -178,9 +177,7 @@ export default function JourneyTracker() {
                         <span className="text-[10px] text-[var(--muted)] font-mono ml-1.5">P{station.platform}</span>
                       ) : null}
                     </p>
-                    {station.delay > 0 && station.status !== "upcoming" && (
-                      <span className="text-[10px] text-[var(--railway-red)] font-mono">+{station.delay}m</span>
-                    )}
+
                   </div>
                   <div className="text-right">
                     <p className={`text-xs font-mono ${station.status === "upcoming" ? "text-[var(--muted)]" : ""}`}>
@@ -204,13 +201,8 @@ export default function JourneyTracker() {
         <div className="flex items-center gap-2 px-1">
           <MapPin className="h-3 w-3 text-[var(--railway-red)]" />
           <p className="text-[11px] text-[var(--muted)]">
-            Currently at{" "}
+            Estimated position:{" "}
             <span className="text-[var(--fg)] font-medium">{data.currentStationName}</span>
-            {delay > 0 && (
-              <span className="text-[var(--railway-red)]">
-                {" "}· Running {delay} min late
-              </span>
-            )}
           </p>
         </div>
       ) : null}
@@ -218,8 +210,8 @@ export default function JourneyTracker() {
       {/* Last update indicator */}
       <div className="flex items-center justify-between px-1">
         <p className="text-[10px] text-[var(--muted)] font-mono flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--fg)]" />
-          Live
+          <span className="w-1.5 h-1.5 rounded-full bg-[var(--border)]" />
+          Estimate · from schedule
         </p>
         <button
           onClick={fetchJourney}

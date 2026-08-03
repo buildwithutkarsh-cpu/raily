@@ -9,7 +9,7 @@ RAILY is not a traditional form-based booking site. It is a conversational opera
 - Natural-language train search and itinerary planning
 - Coach visualization and seat selection
 - PNR status lookup and booking history management
-- Live train tracking and delay-aware journey updates
+- Journey tracking with schedule-based position estimates
 - PDF ticket generation and email delivery
 - A self-hosted railway data API service called `Rapi`
 
@@ -26,7 +26,6 @@ RAILY is not a traditional form-based booking site. It is a conversational opera
 - TanStack React Query for client-side data fetching
 - Self-hosted Rapi service for Indian Railways data scraping and caching
 - Vitest for tests
-
 ## Architecture
 
 RAILY is built as two cooperating services:
@@ -219,7 +218,6 @@ npm run test:headers
 
 - The app includes `vercel.json` for Vercel-style deployment.
 - `next.config.ts` marks `pdfkit` as an external package so PDF assets are preserved during server bundling.
-- `ARCHITECTURE.md` contains deployment and service boundary guidance.
 
 ## Further reading
 - `Rapi/` — Indian Railways data service implementation and test coverage

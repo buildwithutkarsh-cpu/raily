@@ -173,8 +173,8 @@ export default function Home() {
                   desc: "See the exact layout of your coach. Pick your seat with a single click.",
                 },
                 {
-                  title: "Live Journey Tracking",
-                  desc: "Real-time train tracking with delay predictions and platform information.",
+                  title: "Journey Tracking",
+                  desc: "Schedule-based journey tracking with station and platform information.",
                 },
               ].map((feature) => (
                 <div

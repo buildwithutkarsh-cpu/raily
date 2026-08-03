@@ -252,7 +252,7 @@ export const RAILWAY_TOOLS: AIToolDefinition[] = [
     type: "function",
     function: {
       name: "getLiveStatus",
-      description: "Get real-time running status of a train, including current location, delay, speed, and the full station timeline. Use this to track a journey.",
+      description: "Get a schedule-based running estimate for a train — estimated current position and station timeline derived from the timetable, NOT real-time GPS tracking. Delays are not measured; present this as an estimate, never as live status.",
       strict: true,
       parameters: {
         type: "object",
@@ -583,10 +583,10 @@ async function handleGetLiveStatus(args: Record<string, unknown>): Promise<Stand
       const transformed = transformLiveStatus(result.data);
       return success(
         transformed as unknown as Record<string, unknown>,
-        `Live status for train ${trainNumber} retrieved`
+        `Schedule-based running estimate for train ${trainNumber} retrieved`
       );
     }
-    return failure("NOT_FOUND", result.error || `Live status not available for train ${trainNumber}`);
+    return failure("NOT_FOUND", result.error || `Running estimate not available for train ${trainNumber}`);
   });
 }
 
