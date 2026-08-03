@@ -296,14 +296,27 @@ export async function createStreamingCompletion(
         if (delta?.tool_calls) {
           const rawToolCalls = delta.tool_calls as Array<Record<string, unknown>>;
           for (const tc of rawToolCalls) {
-            const tcId = tc.id as string;
-            const existing = toolCalls.find((t) => t.id === tcId);
+            // OpenAI/Groq streams send the tool-call `id` + `function.name`
+            // ONLY on the first fragment; later fragments carry just
+            // `index` + `function.arguments`. Key on `index` when present
+            // (fall back to `id` for providers that include it each chunk)
+            // so fragmented arguments join their tool call instead of
+            // creating broken duplicate entries.
+            const tcIndex = typeof tc.index === "number" ? tc.index : undefined;
+            const tcId = tc.id as string | undefined;
+            const existing =
+              tcIndex !== undefined && tcIndex >= 0 && tcIndex < toolCalls.length
+                ? toolCalls[tcIndex]
+                : tcId
+                  ? toolCalls.find((t) => t.id === tcId)
+                  : undefined;
+
             if (existing) {
               existing.function.arguments += (tc.function as Record<string, unknown>)?.arguments || "";
             } else {
-              const fnData = tc.function as Record<string, unknown> || {};
+              const fnData = (tc.function as Record<string, unknown>) || {};
               toolCalls.push({
-                id: tcId,
+                id: tcId || `call_${toolCalls.length}`,
                 type: "function",
                 function: {
                   name: (fnData.name as string) || "",

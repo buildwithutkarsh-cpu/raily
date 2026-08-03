@@ -201,11 +201,18 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
   let lineCount = 0;
   let doneReceived = false;
 
-  // Add a stream-level timeout to prevent infinite hang
-  const streamTimeout = setTimeout(() => {
-    console.error("[AI Chat] STREAM TIMEOUT: no data for 90s, aborting reader");
-    reader.cancel("Stream timeout").catch(() => {});
-  }, 90_000);
+  // Re-armed "no data" watchdog: fires only when the upstream stalls BETWEEN
+  // chunks. Re-armed after every successful read so a mid-stream hang — not
+  // just a missing first byte — triggers the abort.
+  let streamTimeout: ReturnType<typeof setTimeout> | null = null;
+  const armStreamTimeout = () => {
+    if (streamTimeout) clearTimeout(streamTimeout);
+    streamTimeout = setTimeout(() => {
+      console.error("[AI Chat] STREAM TIMEOUT: no data for 90s, aborting reader");
+      reader.cancel("Stream timeout").catch(() => {});
+    }, 90_000);
+  };
+  armStreamTimeout();
 
   try {
     while (true) {
@@ -229,7 +236,8 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
         break;
       }
 
-      clearTimeout(streamTimeout);
+      // Any data received means the stream is alive — restart the timer.
+      armStreamTimeout();
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -253,7 +261,7 @@ async function* streamProviderCompletion(config: ReturnType<typeof getServerConf
     console.error("[AI Chat] error reading upstream stream:", err);
     yield JSON.stringify({ type: "error", code: "AI_STREAM_READ_ERROR", message: err instanceof Error ? err.message : "Stream read failed" });
   } finally {
-    clearTimeout(streamTimeout);
+    if (streamTimeout) clearTimeout(streamTimeout);
   }
 
   if (!doneReceived) {

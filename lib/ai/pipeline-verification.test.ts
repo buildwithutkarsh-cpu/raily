@@ -259,6 +259,65 @@ describe("createStreamingCompletion (streaming)", () => {
     expect(onToolCall).toHaveBeenCalledTimes(1);
   });
 
+  it("joins tool-call fragments by stream index when later chunks omit the id (real Groq/OpenAI shape)", async () => {
+    // Real OpenAI/Groq streams only include `id` on the FIRST fragment of a
+    // tool call; subsequent fragments carry only `index` + `arguments`.
+    installFetchMock({
+      chat: () =>
+        streamResponse([
+          chunkEvent({
+            id: "x",
+            choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "searchStations", arguments: '{"query":' } }] } }],
+          }),
+          chunkEvent({
+            id: "x",
+            choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"Mumbai"}' } }] } }],
+          }),
+          doneEvent(),
+        ]),
+    });
+    const acc = createStreamAccumulator();
+    const onToolCall = vi.fn();
+    await createStreamingCompletion([{ role: "user", content: "hi" }], [], { onToolCall }, "req_1", acc);
+    expect(acc.toolCalls).toHaveLength(1);
+    expect(acc.toolCalls[0].id).toBe("call_1");
+    expect(acc.toolCalls[0].function.name).toBe("searchStations");
+    expect(acc.toolCalls[0].function.arguments).toBe('{"query":"Mumbai"}');
+    expect(onToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps two parallel tool calls distinct when fragments interleave by index", async () => {
+    installFetchMock({
+      chat: () =>
+        streamResponse([
+          chunkEvent({
+            id: "x",
+            choices: [{ delta: { tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "searchStations", arguments: '{"query":"D' } }] } }],
+          }),
+          chunkEvent({
+            id: "x",
+            choices: [{ delta: { tool_calls: [{ index: 1, id: "call_2", type: "function", function: { name: "searchStations", arguments: '{"query":"J' } }] } }],
+          }),
+          chunkEvent({
+            id: "x",
+            choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'elhi"}' } }, { index: 1, function: { arguments: 'aipur"}' } }] } }],
+          }),
+          doneEvent(),
+        ]),
+    });
+    const acc = createStreamAccumulator();
+    const onToolCall = vi.fn();
+    await createStreamingCompletion([{ role: "user", content: "hi" }], [], { onToolCall }, "req_1", acc);
+    expect(acc.toolCalls).toHaveLength(2);
+    expect(acc.toolCalls[0].id).toBe("call_1");
+    expect(acc.toolCalls[0].function.name).toBe("searchStations");
+    expect(acc.toolCalls[0].function.arguments).toBe('{"query":"Delhi"}');
+    expect(acc.toolCalls[1].id).toBe("call_2");
+    expect(acc.toolCalls[1].function.name).toBe("searchStations");
+    expect(acc.toolCalls[1].function.arguments).toBe('{"query":"Jaipur"}');
+    expect(onToolCall).toHaveBeenCalledTimes(2);
+  });
+
   it("fires onError exactly once for an in-band error event (never onDone)", async () => {
     installFetchMock({
       chat: () =>
