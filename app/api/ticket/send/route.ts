@@ -15,6 +15,20 @@ import { generateTicketPDF } from "@/lib/ticket/pdf";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
+/**
+ * Escape a value for safe interpolation into HTML email bodies.
+ * Booking fields originate from LLM tool args, so they must never be
+ * injected into the template unescaped (HTML/email injection guard).
+ */
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -44,153 +58,17 @@ interface SendTicketRequest {
   verify?: boolean;
 }
 
-export async function POST(request: NextRequest) {
-  // ── Authentication ────────────────────────────────────────
-  // This route sends emails (via Resend) and generates PDFs. Require a
-  // signed-in user so anonymous callers cannot use it as an email
-  // relay / PDF-generation service.
-  const { userId } = await auth();
-  if (!userId) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: "UNAUTHORIZED",
-          message: "Authentication required",
-          retryable: false,
-        },
-      },
-      { status: 401 }
-    );
-  }
-
-  try {
-    const body: SendTicketRequest = await request.json();
-
-    // ── Validation ──────────────────────────────────────────
-    if (!body.email || !body.pnr || !body.trainName) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "INVALID_INPUT",
-            message: "Missing required fields: email, pnr, trainName",
-          },
-        },
-        { status: 400 }
-      );
-    }
-
-    if (body.email !== "download@raily.app" && !body.email.includes("@")) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "INVALID_EMAIL",
-            message: "Please provide a valid email address",
-          },
-        },
-        { status: 400 }
-      );
-    }
-
-    // ── Verify mode (dry-run) ─────────────────────────────────
-    // When verify=true, validate the data is complete but do NOT
-    // generate the full PDF buffer. Used by the downloadTicketPdf
-    // tool to proactively check if PDF generation will succeed.
-    if (body.verify) {
-      const required = ["pnr", "trainName", "trainNumber", "from", "fromCode", "to", "toCode", "date", "departure", "arrival", "coach", "seat", "tier", "class"];
-      for (const field of required) {
-        if (!(body as unknown as Record<string, unknown>)[field]) {
-          return NextResponse.json(
-            {
-              success: false,
-              error: {
-                code: "INVALID_INPUT",
-                message: `Missing required field: ${field}`,
-              },
-            },
-            { status: 400 }
-          );
-        }
-      }
-
-      // Validation passed — return success without generating PDF
-      return NextResponse.json({
-        success: true,
-        data: { verified: true, pnr: body.pnr },
-        message: "PDF generation data validated successfully",
-      });
-    }
-
-    // ── Generate PDF ────────────────────────────────────────
-    console.log(`[Ticket API] Generating PDF for PNR ${body.pnr} (${body.trainName})`);
-    const pdfBuffer = await generateTicketPDF({
-      pnr: body.pnr,
-      trainName: body.trainName,
-      trainNumber: body.trainNumber,
-      from: body.from,
-      fromCode: body.fromCode,
-      to: body.to,
-      toCode: body.toCode,
-      date: body.date,
-      departure: body.departure,
-      arrival: body.arrival,
-      duration: body.duration,
-      coach: body.coach,
-      seat: body.seat,
-      tier: body.tier,
-      fare: body.fare,
-      class: body.class,
-      passengerName: body.passengerName || "Passenger",
-      platform: body.platform || "5",
-      bookingTime: new Date().toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    });
-    console.log(`[Ticket API] PDF generated for PNR ${body.pnr}: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
-
-    // ── Check if request is for download vs email ────────────
-    const isExplicitDownload = body.email === "download@raily.app";
-    const isEmailAvailable = !!process.env.RESEND_API_KEY;
-
-    if (isExplicitDownload) {
-      // User clicked Download — return PDF directly
-      console.log(`[Ticket API] Returning PDF for download: ticket-${body.pnr}.pdf`);
-      return new NextResponse(new Uint8Array(pdfBuffer), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="ticket-${body.pnr}.pdf"`,
-          "Content-Length": String(pdfBuffer.length),
-          "X-Ticket-Info": "PDF ticket generated successfully.",
-        },
-      });
-    }
-
-    if (!isEmailAvailable) {
-      // User wanted email but Resend is not configured
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: "EMAIL_NOT_CONFIGURED",
-          message:
-            "Email service is not configured. Use the Download button to get your ticket PDF instead.",
-        },
-      });
-    }
-
-    // ── Send Email via Resend ───────────────────────────────
-    const { data, error } = await resend!.emails.send({
-      from: `RAILY <${process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"}>`,
-      to: [body.email],
-      subject: `🎫 Your RAILY Ticket - ${body.trainName} (${body.trainNumber})`,
-      html: `
-        <!DOCTYPE html>
+/**
+ * Build the ticket confirmation email HTML. Every user/LLM-supplied value is
+ * HTML-escaped before interpolation to prevent HTML/email injection.
+ */
+function emailHtml(body: SendTicketRequest): string {
+  const e = escapeHtml;
+  // Uppercase the raw value FIRST, then escape — escaping then uppercasing
+  // would corrupt named entities (e.g. `&lt;` → `&LT;`, which is not a valid
+  // case-sensitive HTML entity).
+  const passengerName = e(body.passengerName.toUpperCase());
+  return `<!DOCTYPE html>
         <html>
         <head>
           <meta charset="utf-8">
@@ -349,57 +227,57 @@ export async function POST(request: NextRequest) {
                 <span class="badge">CONFIRMED ✦</span>
               </div>
               <h2>PNR Number</h2>
-              <div class="pnr">${body.pnr}</div>
+              <div class="pnr">${e(body.pnr)}</div>
             </div>
 
             <div class="card">
               <h2>Train</h2>
-              <div class="train-name">${body.trainName}</div>
+              <div class="train-name">${e(body.trainName)}</div>
               <div style="font-size:11px;color:#787878;margin:2px 0;">
-                ${body.trainNumber} · ${body.class}
+                ${e(body.trainNumber)} · ${e(body.class)}
               </div>
             </div>
 
             <div class="card">
               <h2>Journey</h2>
               <div style="font-size:10px;color:#787878;margin-bottom:8px;">
-                ${body.date}
+                ${e(body.date)}
               </div>
               <div class="route">
                 <div class="station">
-                  <div class="station-code">${body.fromCode}</div>
-                  <div class="station-name">${body.from}</div>
-                  <div class="station-time">${body.departure}</div>
+                  <div class="station-code">${e(body.fromCode)}</div>
+                  <div class="station-name">${e(body.from)}</div>
+                  <div class="station-time">${e(body.departure)}</div>
                 </div>
                 <div class="arrow">→</div>
                 <div class="station">
-                  <div class="station-code">${body.toCode}</div>
-                  <div class="station-name">${body.to}</div>
-                  <div class="station-time">${body.arrival}</div>
+                  <div class="station-code">${e(body.toCode)}</div>
+                  <div class="station-name">${e(body.to)}</div>
+                  <div class="station-time">${e(body.arrival)}</div>
                 </div>
               </div>
               <div style="text-align:center;font-size:10px;color:#787878;margin-top:8px;">
-                ${body.duration}
+                ${e(body.duration)}
               </div>
             </div>
 
             <div class="card">
-              <h2>Passenger & Seat</h2>
+              <h2>Passenger &amp; Seat</h2>
               <div style="font-size:14px;font-weight:bold;margin:4px 0;">
-                ${body.passengerName.toUpperCase()}
+                ${passengerName}
               </div>
               <div class="details-grid">
                 <div class="detail-item">
                   <div class="detail-label">Coach</div>
-                  <div class="detail-value">${body.coach}</div>
+                  <div class="detail-value">${e(body.coach)}</div>
                 </div>
                 <div class="detail-item">
                   <div class="detail-label">Seat</div>
-                  <div class="detail-value">${body.seat} (${body.tier})</div>
+                  <div class="detail-value">${e(body.seat)} (${e(body.tier)})</div>
                 </div>
                 <div class="detail-item">
                   <div class="detail-label">Fare</div>
-                  <div class="detail-value">₹${body.fare}</div>
+                  <div class="detail-value">₹${e(body.fare)}</div>
                 </div>
               </div>
             </div>
@@ -409,13 +287,160 @@ export async function POST(request: NextRequest) {
               <p>Not valid for real travel on Indian Railways</p>
               <p style="margin-top:12px;font-size:9px;">
                 RAILY — AI OS for Indian Railways<br>
-                PNR: ${body.pnr}
+                PNR: ${e(body.pnr)}
               </p>
             </div>
           </div>
         </body>
-        </html>
-      `,
+        </html>`;
+}
+
+export async function POST(request: NextRequest) {
+  // ── Authentication ────────────────────────────────────────
+  // This route sends emails (via Resend) and generates PDFs. Require a
+  // signed-in user so anonymous callers cannot use it as an email
+  // relay / PDF-generation service.
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: "UNAUTHORIZED",
+          message: "Authentication required",
+          retryable: false,
+        },
+      },
+      { status: 401 }
+    );
+  }
+
+  try {
+    const body: SendTicketRequest = await request.json();
+
+    // ── Validation ──────────────────────────────────────────
+    if (!body.email || !body.pnr || !body.trainName) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "INVALID_INPUT",
+            message: "Missing required fields: email, pnr, trainName",
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    if (body.email !== "download@raily.app" && !body.email.includes("@")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "INVALID_EMAIL",
+            message: "Please provide a valid email address",
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    // ── Verify mode (dry-run) ─────────────────────────────────
+    // When verify=true, validate the data is complete but do NOT
+    // generate the full PDF buffer. Used by the downloadTicketPdf
+    // tool to proactively check if PDF generation will succeed.
+    if (body.verify) {
+      const required = ["pnr", "trainName", "trainNumber", "from", "fromCode", "to", "toCode", "date", "departure", "arrival", "coach", "seat", "tier", "class"];
+      for (const field of required) {
+        if (!(body as unknown as Record<string, unknown>)[field]) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: {
+                code: "INVALID_INPUT",
+                message: `Missing required field: ${field}`,
+              },
+            },
+            { status: 400 }
+          );
+        }
+      }
+
+      // Validation passed — return success without generating PDF
+      return NextResponse.json({
+        success: true,
+        data: { verified: true, pnr: body.pnr },
+        message: "PDF generation data validated successfully",
+      });
+    }
+
+    // ── Generate PDF ────────────────────────────────────────
+    console.log(`[Ticket API] Generating PDF for PNR ${body.pnr} (${body.trainName})`);
+    const pdfBuffer = await generateTicketPDF({
+      pnr: body.pnr,
+      trainName: body.trainName,
+      trainNumber: body.trainNumber,
+      from: body.from,
+      fromCode: body.fromCode,
+      to: body.to,
+      toCode: body.toCode,
+      date: body.date,
+      departure: body.departure,
+      arrival: body.arrival,
+      duration: body.duration,
+      coach: body.coach,
+      seat: body.seat,
+      tier: body.tier,
+      fare: body.fare,
+      class: body.class,
+      passengerName: body.passengerName || "Passenger",
+      platform: body.platform || "5",
+      bookingTime: new Date().toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    });
+    console.log(`[Ticket API] PDF generated for PNR ${body.pnr}: ${(pdfBuffer.length / 1024).toFixed(1)} KB`);
+
+    // ── Check if request is for download vs email ────────────
+    const isExplicitDownload = body.email === "download@raily.app";
+    const isEmailAvailable = !!process.env.RESEND_API_KEY;
+
+    if (isExplicitDownload) {
+      // User clicked Download — return PDF directly
+      console.log(`[Ticket API] Returning PDF for download: ticket-${body.pnr}.pdf`);
+      return new NextResponse(new Uint8Array(pdfBuffer), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="ticket-${body.pnr}.pdf"`,
+          "Content-Length": String(pdfBuffer.length),
+          "X-Ticket-Info": "PDF ticket generated successfully.",
+        },
+      });
+    }
+
+    if (!isEmailAvailable) {
+      // User wanted email but Resend is not configured
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: "EMAIL_NOT_CONFIGURED",
+          message:
+            "Email service is not configured. Use the Download button to get your ticket PDF instead.",
+        },
+      });
+    }
+
+    // ── Send Email via Resend ───────────────────────────────
+    const { data, error } = await resend!.emails.send({
+      from: `RAILY <${process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev"}>`,
+      to: [body.email],
+      subject: `🎫 Your RAILY Ticket - ${body.trainName} (${body.trainNumber})`,
+      html: emailHtml(body),
       attachments: [
         {
           filename: `ticket-${body.pnr}.pdf`,
