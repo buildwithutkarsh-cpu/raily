@@ -12,8 +12,10 @@ import {
   parseSeatId,
   buildTrainFromBookingData,
   buildQueryFromBookingData,
+  buildSearchStateFromToolData,
   type BookingDataFields,
 } from "./booking-store-utils";
+import type { TrainOption } from "./rapi/transform";
 
 /* ─── buildSeatId ──────────────────────────────────────────── */
 
@@ -240,5 +242,118 @@ describe("buildQueryFromBookingData", () => {
       date: "2026-08-15",
     });
     expect(result.raw).toBe("NDLS to BCT on 2026-08-15");
+  });
+});
+
+/* ─── buildSearchStateFromToolData ────────────────────────── */
+
+describe("buildSearchStateFromToolData", () => {
+  const sampleOptions: TrainOption[] = [
+    {
+      id: "12951-NDLS-BCT",
+      number: "12951",
+      name: "Mumbai Rajdhani",
+      type: "RAJDHANI",
+      departure: "16:35",
+      arrival: "08:30",
+      duration: "15h 55m",
+      fromCode: "NDLS",
+      fromName: "New Delhi",
+      toCode: "BCT",
+      toName: "Mumbai Central",
+      distance: 1384,
+      runningDays: "Daily",
+    },
+    {
+      id: "12015-NDLS-BCT",
+      number: "12015",
+      name: "August Kranti Rajdhani",
+      type: "SUPERFAST",
+      departure: "17:10",
+      arrival: "09:35",
+      duration: "16h 25m",
+      fromCode: "NDLS",
+      fromName: "New Delhi",
+      toCode: "BCT",
+      toName: "Mumbai Central",
+      distance: 1384,
+      runningDays: "1111111",
+    },
+  ];
+
+  const sampleData: Record<string, unknown> = {
+    from: "NDLS",
+    to: "BCT",
+    date: "2026-08-15",
+    total: 2,
+    trains: sampleOptions,
+  };
+
+  it("maps train options into store Train entries", () => {
+    const result = buildSearchStateFromToolData(sampleData);
+    expect(result).not.toBeNull();
+    expect(result!.trains).toHaveLength(2);
+    expect(result!.trains[0]).toEqual({
+      id: "12951-NDLS-BCT",
+      name: "Mumbai Rajdhani",
+      number: "12951",
+      departure: "16:35",
+      arrival: "08:30",
+      duration: "15h 55m",
+      price: 0,
+      available: 0,
+      probability: 0,
+      classType: "",
+      isSuperfast: false,
+      rating: 0,
+    });
+    expect(result!.trains[1].isSuperfast).toBe(true);
+  });
+
+  it("builds the query from station names in the first option", () => {
+    const result = buildSearchStateFromToolData(sampleData);
+    expect(result!.query).toEqual({
+      origin: "New Delhi",
+      destination: "Mumbai Central",
+      date: "2026-08-15",
+      raw: "New Delhi to Mumbai Central on 2026-08-15",
+    });
+  });
+
+  it("falls back to codes when options carry no station names", () => {
+    const noNames: TrainOption[] = sampleOptions.map((t) => ({ ...t, fromName: "", toName: "" }));
+    const result = buildSearchStateFromToolData({ from: "NDLS", to: "BCT", trains: noNames });
+    expect(result!.query.origin).toBe("NDLS");
+    expect(result!.query.destination).toBe("BCT");
+  });
+
+  it("normalizes the 'today' sentinel to a concrete ISO date", () => {
+    const result = buildSearchStateFromToolData({
+      from: "NDLS",
+      to: "BCT",
+      date: "today",
+      trains: sampleOptions,
+    });
+    expect(result!.query.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(result!.query.date).not.toBe("today");
+  });
+
+  it("returns null for empty train arrays", () => {
+    expect(buildSearchStateFromToolData({ from: "NDLS", to: "BCT", trains: [] })).toBeNull();
+  });
+
+  it("returns null for missing or non-array trains", () => {
+    expect(buildSearchStateFromToolData({})).toBeNull();
+    expect(buildSearchStateFromToolData({ trains: "not-an-array" })).toBeNull();
+  });
+
+  it("handles missing date gracefully", () => {
+    const result = buildSearchStateFromToolData({
+      from: "NDLS",
+      to: "BCT",
+      trains: sampleOptions,
+    });
+    expect(result!.query.date).toBe("");
+    expect(result!.query.raw).toBe("New Delhi to Mumbai Central");
   });
 });

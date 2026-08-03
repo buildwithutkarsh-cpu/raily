@@ -11,7 +11,12 @@ import {
 import * as rapi from "@/lib/rapi/endpoints";
 import { processWithAI } from "@/lib/ai/orchestrator";
 import type { AIComponentType, ToolResult, RequestId, BrowserEvent } from "@/lib/ai/types";
-import { buildSeatId, buildTrainFromBookingData, buildQueryFromBookingData } from "@/lib/booking-store-utils";
+import {
+  buildSeatId,
+  buildTrainFromBookingData,
+  buildQueryFromBookingData,
+  buildSearchStateFromToolData,
+} from "@/lib/booking-store-utils";
 
 /* ─── Types ───────────────────────────────────────────────── */
 
@@ -332,6 +337,17 @@ export function BookingProvider({ children }: { children: ReactNode }) {
    */
   const handleToolResult = useCallback((toolName: string, args: Record<string, unknown>, result: ToolResult, _requestId: RequestId) => {
     if (!result.success) return;
+
+    // searchTrains → populate the train list + query so <showTrainList>
+    // renders TrainExplorer instead of an empty state (previously the tool
+    // result only reached the LLM, never the UI).
+    if (toolName === "searchTrains" && result.data) {
+      const searchState = buildSearchStateFromToolData(result.data as Record<string, unknown>);
+      if (searchState) {
+        setState((prev) => ({ ...prev, trains: searchState.trains, query: searchState.query }));
+      }
+      return;
+    }
 
     if (toolName === "confirmBooking" && result.data) {
       syncBookingFromData(result.data as Record<string, unknown>);

@@ -8,6 +8,8 @@
    values from raw booking data (typically tool results or args).
    ══════════════════════════════════════════════════════════════ */
 
+import type { TrainOption } from "./rapi/transform";
+
 /* ─── Types (mirrored from booking-store.tsx) ─────────────── */
 
 export interface ExtractedQuery {
@@ -163,4 +165,67 @@ export function buildQueryFromBookingData(data: BookingDataFields): ExtractedQue
     date,
     raw: `${fromCode} to ${toCode} on ${date}`,
   };
+}
+
+/* ─── Search Result → Store State ─────────────────────────── */
+
+/**
+ * Build the store's `trains` + `query` state from a `searchTrains` tool
+ * result payload (which carries `TrainOption[]` from the Rapi transform
+ * layer). Returns null when the payload has no usable `trains` array.
+ *
+ * The Rapi train search returns schedule data only (times, duration,
+ * running days) — it has no live price/availability fields — so the
+ * derived store entries use neutral defaults for those, matching the
+ * pre-existing fallback behavior of the UI.
+ */
+export function buildSearchStateFromToolData(
+  data: Record<string, unknown>
+): { trains: Train[]; query: ExtractedQuery } | null {
+  const rawTrains = data.trains;
+  if (!Array.isArray(rawTrains) || rawTrains.length === 0) return null;
+
+  const options = rawTrains as TrainOption[];
+  const trains: Train[] = options.map((t) => ({
+    id: t.id,
+    name: t.name,
+    number: t.number,
+    departure: t.departure,
+    arrival: t.arrival,
+    duration: t.duration,
+    price: 0, // schedule search carries no fare — enriched later by getAvailability
+    available: 0,
+    probability: 0,
+    classType: "", // travel class (e.g. "3A") — not in search data; UI falls back to its default
+    isSuperfast: t.type === "SUPERFAST",
+    rating: 0,
+  }));
+
+  // Station names (not codes) for display; fall back to the codes the LLM passed.
+  const origin = options[0].fromName || (data.from as string) || "";
+  const destination = options[0].toName || (data.to as string) || "";
+
+  // The tool returns the literal "today" sentinel when no date was given;
+  // normalize it to a concrete ISO date so consumers like formatDisplayDate
+  // (which parses real dates) never render "Invalid Date".
+  const rawDate = (data.date as string) || "";
+  const date =
+    rawDate === "today" ? toDateString(new Date()) : rawDate;
+
+  const query: ExtractedQuery = {
+    origin,
+    destination,
+    date,
+    raw: `${origin} to ${destination}${date ? ` on ${date}` : ""}`,
+  };
+
+  return { trains, query };
+}
+
+/** Local YYYY-MM-DD formatter (mirrors the store's helper, kept pure). */
+function toDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
