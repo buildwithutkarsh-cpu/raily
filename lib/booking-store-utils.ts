@@ -74,6 +74,42 @@ export function buildSeatId(coach: string, seat: string, tier?: string): string 
   return `${coach}-${seat}${tierInitial}`;
 }
 
+/* ─── Seat ID Parsing ─────────────────────────────────────── */
+
+export interface ParsedSeatId {
+  coach: string;
+  seat: string;
+  tier?: string;
+}
+
+const TIER_NAMES: Record<string, string> = {
+  L: "Lower",
+  M: "Middle",
+  U: "Upper",
+};
+
+/**
+ * Parse a compound seat ID back into its parts.
+ * Format: {coach}-{seatNumber}{tierInitial}
+ *
+ * Examples:
+ *   ("B1-7L") → { coach: "B1", seat: "7", tier: "Lower" }
+ *   ("A1-12M") → { coach: "A1", seat: "12", tier: "Middle" }
+ *   ("B1-7")  → { coach: "B1", seat: "7", tier: undefined }
+ *   ("garbage") → null
+ */
+export function parseSeatId(seatId: string | null | undefined): ParsedSeatId | null {
+  if (!seatId) return null;
+  const match = seatId.match(/^([A-Z][A-Z0-9]*)-(\d+)([LMU])?$/i);
+  if (!match) return null;
+  const [, coach, seat, tierInitial] = match;
+  return {
+    coach,
+    seat,
+    tier: tierInitial ? TIER_NAMES[tierInitial.toUpperCase()] : undefined,
+  };
+}
+
 /* ─── Train Construction ──────────────────────────────────── */
 
 /**

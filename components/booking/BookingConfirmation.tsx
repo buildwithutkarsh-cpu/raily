@@ -1,6 +1,7 @@
 "use client";
 
 import { useBooking, formatDisplayDate } from "@/lib/booking-store";
+import { parseSeatId } from "@/lib/booking-store-utils";
 import { motion } from "framer-motion";
 import { Check, Train, ArrowRight, Clock, Ticket } from "lucide-react";
 
@@ -10,6 +11,9 @@ export default function BookingConfirmation() {
   const train = state.selectedTrain;
   const pnr = state.pnrNumber || "—";
   const query = state.query;
+  const seatInfo = state.selectedSeat ? parseSeatId(state.selectedSeat) : null;
+  const seatLabel = seatInfo ? `${seatInfo.seat}${seatInfo.tier ? ` (${seatInfo.tier})` : ""}` : "";
+  const seatRow = seatInfo ? `${seatInfo.coach}-${seatInfo.seat}${seatInfo.tier ? ` (${seatInfo.tier})` : ""}` : "";
 
   return (
     <div className="space-y-4">
@@ -93,8 +97,8 @@ export default function BookingConfirmation() {
         <div className="grid grid-cols-4 px-4 py-3 border-b border-[var(--border)]">
           {[
             { label: "PNR", value: pnr },
-            { label: "Coach", value: state.selectedCoach || "B1" },
-            { label: "Seat", value: state.selectedSeat ? `7 (Lower)` : "—" },
+            { label: "Coach", value: seatInfo?.coach || state.selectedCoach || "B1" },
+            { label: "Seat", value: seatLabel || "—" },
             { label: "Platform", value: "5" },
           ].map((item) => (
             <div key={item.label} className="text-center">
@@ -117,7 +121,7 @@ export default function BookingConfirmation() {
             </div>
             <div className="flex items-center gap-3">
               <span className="text-[11px] text-[var(--muted)]">
-                {state.selectedCoach || "B1"}-7 (Lower)
+                {seatRow || `${state.selectedCoach || "B1"} (—)`}
               </span>
               <span className="px-2 py-0.5 bg-[var(--fg)] text-[var(--bg)] text-[9px] font-mono uppercase tracking-[0.1em]">
                 CNF

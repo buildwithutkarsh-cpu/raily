@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSeatId,
+  parseSeatId,
   buildTrainFromBookingData,
   buildQueryFromBookingData,
   type BookingDataFields,
@@ -47,6 +48,42 @@ describe("buildSeatId", () => {
 
   it("formats with different coach names", () => {
     expect(buildSeatId("S1", "55", "Upper")).toBe("S1-55U");
+  });
+});
+
+/* ─── parseSeatId ──────────────────────────────────────────── */
+
+describe("parseSeatId", () => {
+  it("parses a standard compound seat ID", () => {
+    expect(parseSeatId("B1-7L")).toEqual({ coach: "B1", seat: "7", tier: "Lower" });
+  });
+
+  it("parses middle and upper berth tiers", () => {
+    expect(parseSeatId("A1-12M")).toEqual({ coach: "A1", seat: "12", tier: "Middle" });
+    expect(parseSeatId("S5-3U")).toEqual({ coach: "S5", seat: "3", tier: "Upper" });
+  });
+
+  it("handles lowercase tier initial", () => {
+    expect(parseSeatId("B1-7l")).toEqual({ coach: "B1", seat: "7", tier: "Lower" });
+  });
+
+  it("leaves tier undefined when no tier initial present", () => {
+    expect(parseSeatId("B1-7")).toEqual({ coach: "B1", seat: "7", tier: undefined });
+  });
+
+  it("round-trips with buildSeatId", () => {
+    const id = buildSeatId("B1", "7", "Lower");
+    expect(parseSeatId(id)).toEqual({ coach: "B1", seat: "7", tier: "Lower" });
+    expect(parseSeatId(buildSeatId("S1", "55", "Upper"))).toEqual({ coach: "S1", seat: "55", tier: "Upper" });
+  });
+
+  it("returns null for empty / null / malformed input", () => {
+    expect(parseSeatId(null)).toBeNull();
+    expect(parseSeatId(undefined)).toBeNull();
+    expect(parseSeatId("")).toBeNull();
+    expect(parseSeatId("garbage")).toBeNull();
+    expect(parseSeatId("B1")).toBeNull();
+    expect(parseSeatId("7L")).toBeNull();
   });
 });
 
