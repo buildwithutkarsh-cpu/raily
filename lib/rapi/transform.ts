@@ -210,14 +210,38 @@ export function transformLiveStatus(live: LiveStatusData): JourneyInfo {
   };
 }
 
+/*
+ * Rapi computes the seat status server-side (determineSeatStatus) and returns
+ * it as `status` on each class — including RAC / WAITLIST. Map that straight
+ * through, falling back to the old available-count heuristic only when the
+ * upstream omits `status`.
+ */
+const SEAT_STATUS_LOOKUP: Record<string, ClassAvailability["status"]> = {
+  AVAILABLE: "AVAILABLE",
+  RAC: "RAC",
+  WAITLIST: "WAITLIST",
+  GNWL: "WAITLIST",
+  PQWL: "WAITLIST",
+  RLWL: "WAITLIST",
+  RELEASE: "AVAILABLE",
+  CHART_PREPARED: "NOT_AVAILABLE",
+  NOT_APPLICABLE: "NOT_AVAILABLE",
+  NOT_AVAILABLE: "NOT_AVAILABLE",
+};
+
 export function transformAvailability(avail: AvailabilityData): ClassAvailability[] {
-  return (avail.classes || []).map((c: RapiClassAvailability) => ({
-    code: c.classCode,
-    name: c.className,
-    status: (c.available > 0 ? "AVAILABLE" : "NOT_AVAILABLE") as ClassAvailability["status"],
-    available: c.available,
-    fare: c.fare,
-  }));
+  return (avail.classes || []).map((c: RapiClassAvailability) => {
+    const raw = c.status || "";
+    const mapped = SEAT_STATUS_LOOKUP[raw.toUpperCase()];
+    const status = mapped || (c.available > 0 ? "AVAILABLE" : "NOT_AVAILABLE");
+    return {
+      code: c.classCode,
+      name: c.className,
+      status,
+      available: c.available,
+      fare: c.fare,
+    };
+  });
 }
 
 export function transformPNR(pnrData: PNRStatusData): PNRActionInfo {
