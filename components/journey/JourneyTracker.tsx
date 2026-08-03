@@ -58,13 +58,47 @@ export default function JourneyTracker() {
   const { state } = useBooking();
   const [journey, setJourney] = useState<JourneyInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  // Real train number — from the selected train, or resolved from the PNR
+  // via a lookup (PNR digits are NOT a train number, so we never slice them).
+  const [trainNumber, setTrainNumber] = useState<string | null>(
+    state.selectedTrain?.number || null
+  );
+  const [resolved, setResolved] = useState(!!state.selectedTrain?.number);
 
-  const trainNumber = state.selectedTrain?.number || state.pnrNumber?.slice(0, 5) || "12951";
+  useEffect(() => {
+    let cancelled = false;
+
+    const resolveTrainNumber = async () => {
+      if (state.selectedTrain?.number) {
+        setTrainNumber(state.selectedTrain.number);
+        setResolved(true);
+        return;
+      }
+      if (state.pnrNumber) {
+        // Look up the actual train number from the PNR status endpoint.
+        const result = await rapi.getPNRStatus(state.pnrNumber);
+        if (!cancelled && result.success && result.data?.train?.number) {
+          setTrainNumber(result.data.train.number);
+        }
+        if (!cancelled) setResolved(true);
+        return;
+      }
+      if (!cancelled) {
+        setTrainNumber(null);
+        setResolved(true);
+      }
+    };
+
+    resolveTrainNumber();
+    return () => {
+      cancelled = true;
+    };
+  }, [state.selectedTrain?.number, state.pnrNumber]);
 
   const fetchJourney = async () => {
     setLoading(true);
     try {
-      const result = await rapi.getLiveStatus(trainNumber);
+      const result = await rapi.getLiveStatus(trainNumber || "12951");
       if (result.success && result.data) {
         setJourney(transformLiveStatus(result.data));
       } else {
@@ -78,8 +112,9 @@ export default function JourneyTracker() {
   };
 
   useEffect(() => {
+    if (!resolved) return;
     fetchJourney();
-  }, [trainNumber]);
+  }, [resolved, trainNumber]);
 
   if (loading) return <JourneySkeleton />;
 
